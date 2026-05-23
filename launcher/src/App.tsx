@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { LoginScreen } from "@/screens/LoginScreen";
 import { HomeScreen } from "@/screens/HomeScreen";
+import { SettingsScreen } from "@/screens/SettingsScreen";
 import { clearProfile, loadProfile, type PlayerProfile } from "@/lib/profile";
+
+type Route = "home" | "settings";
 
 type AppState =
   | { kind: "loading" }
   | { kind: "login" }
-  | { kind: "home"; profile: PlayerProfile };
+  | { kind: "authed"; profile: PlayerProfile; route: Route };
 
 export default function App() {
   const [state, setState] = useState<AppState>({ kind: "loading" });
@@ -18,7 +21,11 @@ export default function App() {
       try {
         const profile = await loadProfile();
         if (cancelled) return;
-        setState(profile ? { kind: "home", profile } : { kind: "login" });
+        setState(
+          profile
+            ? { kind: "authed", profile, route: "home" }
+            : { kind: "login" },
+        );
       } catch (err) {
         console.error("Failed to load profile", err);
         if (!cancelled) setState({ kind: "login" });
@@ -49,10 +56,30 @@ export default function App() {
   if (state.kind === "login") {
     return (
       <LoginScreen
-        onLoggedIn={(profile) => setState({ kind: "home", profile })}
+        onLoggedIn={(profile) =>
+          setState({ kind: "authed", profile, route: "home" })
+        }
       />
     );
   }
 
-  return <HomeScreen profile={state.profile} onLogout={handleLogout} />;
+  if (state.route === "settings") {
+    return (
+      <SettingsScreen
+        onBack={() =>
+          setState({ kind: "authed", profile: state.profile, route: "home" })
+        }
+      />
+    );
+  }
+
+  return (
+    <HomeScreen
+      profile={state.profile}
+      onLogout={handleLogout}
+      onOpenSettings={() =>
+        setState({ kind: "authed", profile: state.profile, route: "settings" })
+      }
+    />
+  );
 }

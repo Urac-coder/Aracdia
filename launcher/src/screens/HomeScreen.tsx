@@ -6,11 +6,12 @@ import type { PlayerProfile } from "@/lib/profile";
 interface HomeScreenProps {
   profile: PlayerProfile;
   onLogout: () => void;
+  onOpenSettings: () => void;
 }
 
 const LAUNCHER_VERSION = "0.1.0";
 
-export function HomeScreen({ profile, onLogout }: HomeScreenProps) {
+export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProps) {
   function handlePlay() {
     // TODO: trigger the download + launch pipeline (etapes 3–5)
     console.log("Play clicked — launch pipeline not implemented yet");
@@ -35,7 +36,12 @@ export function HomeScreen({ profile, onLogout }: HomeScreenProps) {
         </div>
 
         <div className="no-drag flex items-center gap-2">
-          <Button variant="ghost" size="sm" aria-label="Paramètres">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenSettings}
+            aria-label="Paramètres"
+          >
             <Settings className="h-4 w-4" />
           </Button>
           <Button variant="ghost" size="sm" onClick={onLogout} aria-label="Déconnexion">
