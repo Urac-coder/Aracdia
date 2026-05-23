@@ -2,6 +2,7 @@
 
 mod download;
 mod engine;
+mod launch;
 mod paths;
 mod profile;
 mod settings;
@@ -11,6 +12,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(engine::EngineLock::default())
+        .manage(launch::LaunchState::default())
         .invoke_handler(tauri::generate_handler![
             profile::load_profile,
             profile::save_profile,
@@ -23,6 +25,9 @@ pub fn run() {
             engine::fetch_engine_release,
             engine::install_engine,
             engine::uninstall_engine,
+            launch::launch_engine,
+            launch::stop_engine,
+            launch::is_engine_running,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aracdia launcher");

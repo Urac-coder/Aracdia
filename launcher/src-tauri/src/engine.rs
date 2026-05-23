@@ -338,6 +338,10 @@ async fn install_inner(
     .await
     .map_err(|e| EngineError::Settings(format!("extract task panicked: {e}")))??;
 
+    // 3.5. Strip macOS quarantine attribute on the freshly extracted tree so
+    //      Gatekeeper doesn't block the unsigned engine bundle at first launch.
+    crate::launch::strip_quarantine(&dest);
+
     // 4. Marker file
     write_installed_version(custom_ref, &release.version)?;
 

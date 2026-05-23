@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   Download,
+  Gamepad2,
   LogOut,
   Newspaper,
   Play,
   Settings,
+  Square,
   XCircle,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
@@ -22,6 +24,12 @@ import {
   type EngineStatus,
   type InstallProgress,
 } from "@/lib/engine";
+import {
+  isEngineRunning,
+  launchEngine,
+  listenToLaunch,
+  stopEngine,
+} from "@/lib/launch";
 
 interface HomeScreenProps {
   profile: PlayerProfile;
@@ -33,10 +41,10 @@ const LAUNCHER_VERSION = "0.1.0";
 
 type Flow =
   | { kind: "idle" }
-  | { kind: "checking" }
   | { kind: "fetchingManifest" }
   | { kind: "installing"; progress: InstallProgress | null; release: EngineRelease }
-  | { kind: "ready" }
+  | { kind: "starting" }
+  | { kind: "running"; pid: number; logPath: string }
   | { kind: "error"; message: string };
 
 export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProps) {
@@ -44,15 +52,24 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
   const [flow, setFlow] = useState<Flow>({ kind: "idle" });
   const installInFlight = useRef(false);
 
-  // Initial engine status fetch
+  // Initial engine status fetch + reconcile a possibly running engine after reload
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const s = await getEngineStatus();
-        if (!cancelled) setStatus(s);
+        const [s, running] = await Promise.all([
+          getEngineStatus(),
+          isEngineRunning(),
+        ]);
+        if (cancelled) return;
+        setStatus(s);
+        if (running) {
+          // We don't have the original PID/logPath here, but we know a session
+          // is alive — show the running UI with placeholder values.
+          setFlow({ kind: "running", pid: 0, logPath: "" });
+        }
       } catch (err) {
-        console.error("Failed to read engine status", err);
+        console.error("Failed to read engine state", err);
       }
     })();
     return () => {
@@ -60,7 +77,7 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
     };
   }, []);
 
-  // Subscribe to install events for the lifetime of this screen
+  // Subscribe to install events
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     listenToInstall({
@@ -71,7 +88,7 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
       },
       onComplete: ({ version }) => {
         setStatus({ kind: "installed", version, path: "" });
-        setFlow({ kind: "ready" });
+        setFlow({ kind: "idle" });
         installInFlight.current = false;
       },
       onError: ({ message }) => {
@@ -86,28 +103,70 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
     };
   }, []);
 
+  // Subscribe to launch lifecycle events
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listenToLaunch({
+      onStarted: ({ pid, logPath }) => {
+        setFlow({ kind: "running", pid, logPath });
+      },
+      onExited: ({ exitCode, success }) => {
+        setFlow(
+          success
+            ? { kind: "idle" }
+            : {
+                kind: "error",
+                message: `Le moteur s'est arrêté avec le code ${exitCode ?? "?"}.`,
+              },
+        );
+      },
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   async function handlePlay() {
     if (installInFlight.current) return;
+    if (flow.kind === "running" || flow.kind === "starting") return;
 
     if (status?.kind === "installed") {
-      // TODO step 5: spawn the engine subprocess.
-      console.log("Engine ready, would launch now");
+      try {
+        setFlow({ kind: "starting" });
+        await launchEngine();
+        // The "started" event will move us to the running state.
+      } catch (err) {
+        setFlow({
+          kind: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 
+    // Engine not installed yet → trigger install pipeline
     installInFlight.current = true;
     try {
       setFlow({ kind: "fetchingManifest" });
       const release = await fetchEngineRelease();
       setFlow({ kind: "installing", progress: null, release });
       await installEngine(release);
-      // Final state set by the onComplete listener above.
     } catch (err) {
       setFlow({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),
       });
       installInFlight.current = false;
+    }
+  }
+
+  async function handleStop() {
+    try {
+      await stopEngine();
+    } catch (err) {
+      console.error("Failed to stop engine", err);
     }
   }
 
@@ -147,8 +206,8 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
                 Aracdia est en cours de construction
               </p>
               <p className="mt-1 max-w-md text-sm text-[var(--color-text-secondary)]">
-                Le launcher peut télécharger et installer le moteur Aracdia. Le
-                lancement effectif du jeu arrive à l'étape suivante.
+                Le launcher peut télécharger, installer et lancer le moteur Aracdia.
+                Le contenu de jeu (mods Lua) arrive dans les prochaines étapes.
               </p>
             </div>
           </Card>
@@ -174,6 +233,7 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
               status={status}
               flow={flow}
               onPlay={handlePlay}
+              onStop={handleStop}
               onRetry={() => setFlow({ kind: "idle" })}
             />
           </Card>
@@ -187,10 +247,11 @@ interface PlayPanelProps {
   status: EngineStatus | null;
   flow: Flow;
   onPlay: () => void;
+  onStop: () => void;
   onRetry: () => void;
 }
 
-function PlayPanel({ status, flow, onPlay, onRetry }: PlayPanelProps) {
+function PlayPanel({ status, flow, onPlay, onStop, onRetry }: PlayPanelProps) {
   const isInstalled = status?.kind === "installed";
 
   if (flow.kind === "fetchingManifest") {
@@ -223,21 +284,46 @@ function PlayPanel({ status, flow, onPlay, onRetry }: PlayPanelProps) {
     );
   }
 
-  if (flow.kind === "error") {
+  if (flow.kind === "starting") {
+    return (
+      <PanelLayout title="Démarrage du moteur" subtitle="Préparation du processus…">
+        <Spinner />
+      </PanelLayout>
+    );
+  }
+
+  if (flow.kind === "running") {
     return (
       <PanelLayout
-        icon={<XCircle className="h-5 w-5 text-[var(--color-danger-500)]" />}
-        title="Échec de l'installation"
-        subtitle={flow.message}
+        icon={<Gamepad2 className="h-5 w-5 text-[var(--color-success-500)]" />}
+        title="Jeu en cours"
+        subtitle={
+          flow.pid > 0 ? `PID ${flow.pid}` : "Session déjà active à l'ouverture du launcher"
+        }
       >
-        <Button variant="secondary" className="w-full" onClick={onRetry}>
-          Réessayer plus tard
+        <Button variant="danger" className="w-full" onClick={onStop}>
+          <Square className="h-4 w-4" />
+          Quitter le jeu
         </Button>
       </PanelLayout>
     );
   }
 
-  // Idle / ready states
+  if (flow.kind === "error") {
+    return (
+      <PanelLayout
+        icon={<XCircle className="h-5 w-5 text-[var(--color-danger-500)]" />}
+        title="Échec"
+        subtitle={flow.message}
+      >
+        <Button variant="secondary" className="w-full" onClick={onRetry}>
+          Fermer
+        </Button>
+      </PanelLayout>
+    );
+  }
+
+  // Idle states (engine installed or not)
   return (
     <>
       <div className="mb-4">
