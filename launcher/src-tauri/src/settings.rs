@@ -24,6 +24,11 @@ const DEFAULT_MEMORY_MB: u32 = 2048;
 const DEFAULT_SERVER_ADDRESS: &str = "";
 const DEFAULT_SERVER_PORT: u16 = 30_000;
 const DEFAULT_AUTO_CONNECT: bool = false;
+/// Default manifest URL: the GitHub Releases API "latest" endpoint of the
+/// (yet-to-be-created) `aracdia-engine` repo. Configurable so users/devs can
+/// point the launcher at a custom manifest while the fork is being set up.
+const DEFAULT_MANIFEST_URL: &str =
+    "https://api.github.com/repos/aracdia/aracdia-engine/releases/latest";
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +45,14 @@ pub struct LauncherSettings {
     /// Custom install dir for engine + game content. `None` = use OS default.
     #[serde(default)]
     pub install_dir: Option<PathBuf>,
+    /// URL where the launcher fetches the engine release manifest. Allows
+    /// overriding the default `aracdia-engine` repo for testing.
+    #[serde(default = "default_manifest_url")]
+    pub manifest_url: String,
+}
+
+fn default_manifest_url() -> String {
+    DEFAULT_MANIFEST_URL.to_owned()
 }
 
 impl Default for LauncherSettings {
@@ -50,6 +63,7 @@ impl Default for LauncherSettings {
             server_port: DEFAULT_SERVER_PORT,
             auto_connect: DEFAULT_AUTO_CONNECT,
             install_dir: None,
+            manifest_url: default_manifest_url(),
         }
     }
 }
@@ -92,6 +106,14 @@ fn validate(settings: &LauncherSettings) -> Result<(), SettingsError> {
         && settings.server_address.trim().is_empty()
     {
         return Err(SettingsError::Invalid("server_address is whitespace only"));
+    }
+    if settings.manifest_url.trim().is_empty() {
+        return Err(SettingsError::Invalid("manifest_url is empty"));
+    }
+    if !(settings.manifest_url.starts_with("https://")
+        || settings.manifest_url.starts_with("http://"))
+    {
+        return Err(SettingsError::Invalid("manifest_url must be http(s)"));
     }
     Ok(())
 }

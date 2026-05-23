@@ -132,3 +132,7 @@ The launcher fetches a JSON manifest from a known URL (e.g.
 | 4 | GitHub Releases for asset hosting | Free, simple, sufficient until thousands of players |
 | 5 | Fork Luanti as `aracdia-engine` | Branding control, full ownership of release flow |
 | 6 | Monorepo | Atomic changes across launcher/game/server, single CI |
+| 7 | GitHub Releases API as engine manifest | Free, well-documented, the launcher hits `/releases/latest` and reads `assets[]` |
+| 8 | Asset naming `aracdia-engine-<rust-target>.zip` + `.sha256` sidecar | Self-describing, easy to produce in CI, easy to verify |
+| 9 | Single engine version installed at a time, in `<install>/engine/` | Simpler code; rollback handled by re-installing an older release |
+| 10 | Tauri events (`engine://progress`/`complete`/`error`) for install UX | Decouples async pipeline from UI rendering, easy to subscribe |

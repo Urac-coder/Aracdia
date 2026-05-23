@@ -6,6 +6,7 @@ export interface LauncherSettings {
   serverPort: number;
   autoConnect: boolean;
   installDir: string | null;
+  manifestUrl: string;
 }
 
 /** Mirror of Rust-side limits — keep in sync with `settings.rs`. */
@@ -17,12 +18,16 @@ export const SETTINGS_RULES = {
   serverAddressMax: 253,
 } as const;
 
+export const DEFAULT_MANIFEST_URL =
+  "https://api.github.com/repos/aracdia/aracdia-engine/releases/latest";
+
 export const DEFAULT_SETTINGS: LauncherSettings = {
   memoryMb: 2048,
   serverAddress: "",
   serverPort: 30_000,
   autoConnect: false,
   installDir: null,
+  manifestUrl: DEFAULT_MANIFEST_URL,
 };
 
 export async function loadSettings(): Promise<LauncherSettings> {
@@ -43,6 +48,7 @@ export interface SettingsValidationErrors {
   memoryMb?: string;
   serverAddress?: string;
   serverPort?: string;
+  manifestUrl?: string;
 }
 
 export function validateSettings(
@@ -74,6 +80,13 @@ export function validateSettings(
     settings.serverAddress.trim().length === 0
   ) {
     errors.serverAddress = "Adresse invalide.";
+  }
+
+  const manifestUrl = settings.manifestUrl.trim();
+  if (manifestUrl.length === 0) {
+    errors.manifestUrl = "URL requise.";
+  } else if (!/^https?:\/\//i.test(manifestUrl)) {
+    errors.manifestUrl = "Doit commencer par http(s)://";
   }
 
   return errors;

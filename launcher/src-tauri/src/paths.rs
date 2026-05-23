@@ -5,7 +5,7 @@
 //! - Windows: `%APPDATA%\Aracdia\Launcher\`
 //! - Linux:   `~/.local/share/aracdia-launcher/` (XDG_DATA_HOME)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 use once_cell::sync::Lazy;
@@ -39,6 +39,36 @@ pub fn profile_file() -> Result<PathBuf, std::io::Error> {
 /// Ensures `data_dir()` exists, creating it (and parents) if necessary.
 pub fn ensure_data_dir() -> Result<PathBuf, std::io::Error> {
     let dir = data_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Resolves the install root: a custom path if the user set one, otherwise
+/// the OS data dir. The directory is created on demand.
+pub fn install_root(custom: Option<&Path>) -> Result<PathBuf, std::io::Error> {
+    let root = match custom {
+        Some(p) => p.to_path_buf(),
+        None => data_dir()?,
+    };
+    std::fs::create_dir_all(&root)?;
+    Ok(root)
+}
+
+/// Returns the directory where the engine is extracted (single-version policy).
+pub fn engine_dir(custom_install: Option<&Path>) -> Result<PathBuf, std::io::Error> {
+    Ok(install_root(custom_install)?.join("engine"))
+}
+
+/// Returns the path of the marker file written after a successful engine
+/// install. Its presence + version means "the engine is ready to launch".
+pub fn engine_version_file(custom_install: Option<&Path>) -> Result<PathBuf, std::io::Error> {
+    Ok(engine_dir(custom_install)?.join(".aracdia-version"))
+}
+
+/// Returns the directory used for staging downloads before they are verified
+/// and extracted into their final location.
+pub fn cache_dir() -> Result<PathBuf, std::io::Error> {
+    let dir = data_dir()?.join("cache");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

@@ -201,6 +201,19 @@ export function SettingsScreen({ onBack }: SettingsScreenProps) {
                 }}
               />
             </Field>
+
+            <Field
+              label="URL du manifest moteur"
+              hint="API GitHub Releases du repo aracdia-engine (ou un fork pour tests)."
+              error={errors.manifestUrl}
+            >
+              <Input
+                placeholder="https://api.github.com/repos/aracdia/aracdia-engine/releases/latest"
+                value={settings.manifestUrl}
+                invalid={!!errors.manifestUrl}
+                onChange={(e) => update("manifestUrl", e.currentTarget.value)}
+              />
+            </Field>
           </SettingsSection>
         </div>
       </main>
