@@ -54,7 +54,7 @@ npm run tauri build    # produces a signed bundle in src-tauri/target/release/bu
 - [x] **Step 5** — Engine spawn (subprocess) with stdout/stderr capture, rolling log file, macOS quarantine handling, single-process invariant, "Quitter le jeu" UI
 - [x] **Phase A.1** — Minimum Aracdia game content: `game.conf`, menu assets, `aracdia_core` mod with 7 nodes (dirt / grass / stone / sand / water / wood / leaves), mapgen aliases, 3 biomes, placeholder textures. Verified to boot a headless server on `--gameid aracdia` with no errors.
 - [x] **Phase A.3 (a)** — `game/` is bundled as a Tauri resource and auto-deployed to `<luanti_user>/games/aracdia/` before each spawn (idempotent, SHA-256 signature check skips redundant copies). Engine receives `--gameid aracdia` so the user lands directly in Aracdia, never in the bare Luanti menu.
-- [ ] **Step 4 / Phase A.3 (b)** — Distribute `game/` as separate versioned releases (similar to engine releases) so updates don't require shipping a new launcher
+- [x] **Phase A.3 (b) / Step 4** — Game content is published as versioned `aracdia-game-vX.Y.Z` releases on the monorepo via [`.github/workflows/game-release.yml`](.github/workflows/game-release.yml). The launcher fetches the latest, verifies the SHA-256 and atomically swaps it into Luanti's user games dir, taking precedence over the bundled fallback. First release: [`game-v0.1.0`](https://github.com/Urac-coder/Aracdia/releases/tag/game-v0.1.0).
 - [ ] **Step 6** — Launcher self-update (Tauri Updater + Ed25519 signing)
 - [ ] **Step 7** — Polish (settings, error states, telemetry)
 - [ ] **Step 8** — Game `mods/` (Lua): weight inventory, MOBA-like spells, custom UI
