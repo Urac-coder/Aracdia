@@ -2,12 +2,20 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface LauncherSettings {
   memoryMb: number;
+  /** Optional remote server override (e.g. a future Aracdia VPS). Empty
+   * means: use the launcher-managed local server. */
   serverAddress: string;
   serverPort: number;
+  /** Always-true now (the launcher never shows the Luanti menu). Kept for
+   * forward compatibility with persisted settings files. */
   autoConnect: boolean;
   installDir: string | null;
   manifestUrl: string;
   contentManifestUrl: string;
+  /** Port the launcher-managed local server listens on. */
+  localServerPort: number;
+  /** Bind address (`0.0.0.0` exposes on LAN, `127.0.0.1` machine-only). */
+  localServerBind: string;
 }
 
 /** Mirror of Rust-side limits — keep in sync with `settings.rs`. */
@@ -29,10 +37,12 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
   memoryMb: 2048,
   serverAddress: "",
   serverPort: 30_000,
-  autoConnect: false,
+  autoConnect: true,
   installDir: null,
   manifestUrl: DEFAULT_MANIFEST_URL,
   contentManifestUrl: DEFAULT_CONTENT_MANIFEST_URL,
+  localServerPort: 30_000,
+  localServerBind: "0.0.0.0",
 };
 
 export async function loadSettings(): Promise<LauncherSettings> {
@@ -55,6 +65,8 @@ export interface SettingsValidationErrors {
   serverPort?: string;
   manifestUrl?: string;
   contentManifestUrl?: string;
+  localServerPort?: string;
+  localServerBind?: string;
 }
 
 export function validateSettings(
@@ -102,7 +114,32 @@ export function validateSettings(
     errors.contentManifestUrl = "Doit commencer par http(s)://";
   }
 
+  if (
+    !Number.isInteger(settings.localServerPort) ||
+    settings.localServerPort < SETTINGS_RULES.portMin ||
+    settings.localServerPort > SETTINGS_RULES.portMax
+  ) {
+    errors.localServerPort = `Port entre ${SETTINGS_RULES.portMin} et ${SETTINGS_RULES.portMax}.`;
+  }
+
+  const bind = settings.localServerBind.trim();
+  if (bind.length === 0) {
+    errors.localServerBind = "Adresse requise.";
+  } else if (!isValidIp(bind)) {
+    errors.localServerBind = "Doit être une adresse IP (ex : 0.0.0.0 ou 127.0.0.1).";
+  }
+
   return errors;
+}
+
+function isValidIp(s: string): boolean {
+  // IPv4
+  const parts = s.split(".");
+  if (parts.length === 4 && parts.every((p) => /^\d+$/.test(p) && Number(p) <= 255)) {
+    return true;
+  }
+  // very loose IPv6 acceptance — Rust validates strictly server-side
+  return /^[0-9a-fA-F:]+$/.test(s) && s.includes(":");
 }
 
 export function hasErrors(errors: SettingsValidationErrors): boolean {

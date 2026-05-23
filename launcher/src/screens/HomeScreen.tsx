@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
+  Circle,
   CloudDownload,
   Download,
   Gamepad2,
@@ -8,7 +9,9 @@ import {
   Newspaper,
   Package,
   Play,
+  Power,
   RefreshCw,
+  Server,
   Settings,
   Square,
   XCircle,
@@ -43,6 +46,14 @@ import {
   stopEngine,
   type RunningSession,
 } from "@/lib/launch";
+import {
+  getServerStatus,
+  listenToServer,
+  startServer,
+  stopServer,
+  type ServerSession,
+  type ServerStatus,
+} from "@/lib/server";
 
 interface HomeScreenProps {
   profile: PlayerProfile;
@@ -251,9 +262,162 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
             />
           </Card>
 
+          <ServerCard />
           <ContentCard />
         </aside>
       </main>
+    </div>
+  );
+}
+
+function ServerCard() {
+  const [status, setStatus] = useState<ServerStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let interval: number | null = null;
+
+    const refresh = async () => {
+      try {
+        const s = await getServerStatus();
+        if (!cancelled) setStatus(s);
+      } catch (err) {
+        console.error("Failed to read server status", err);
+      }
+    };
+
+    refresh();
+    // Poll every 5 s to catch external changes (server crash, manual kill).
+    interval = window.setInterval(refresh, 5_000);
+
+    return () => {
+      cancelled = true;
+      if (interval !== null) clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listenToServer({
+      onStarted: (session) => {
+        const s: ServerStatus = { kind: "running", ...session };
+        setStatus(s);
+        setError(null);
+      },
+      onStopped: () => {
+        setStatus({ kind: "stopped" });
+      },
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  async function handleToggle() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (status?.kind === "running") {
+        await stopServer();
+      } else {
+        await startServer();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const running = status?.kind === "running";
+
+  return (
+    <Card className="p-5">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[var(--color-text-secondary)]">
+          <Server className="h-4 w-4" />
+          <h2 className="text-xs font-medium uppercase tracking-wider">Serveur Aracdia</h2>
+        </div>
+        <ServerStatusBadge running={running} />
+      </div>
+
+      {running ? (
+        <RunningServerInfo session={status as ServerSession & { kind: "running" }} />
+      ) : (
+        <p className="text-sm text-[var(--color-text-secondary)]">
+          Le serveur est arrêté. Démarre-le pour permettre à tes amis de te rejoindre, même quand tu ne joues pas.
+        </p>
+      )}
+
+      {error && (
+        <p className="mt-3 text-xs text-[var(--color-danger-500)]">{error}</p>
+      )}
+
+      <Button
+        size="sm"
+        variant={running ? "secondary" : "primary"}
+        className="mt-4 w-full"
+        onClick={handleToggle}
+        disabled={busy}
+      >
+        <Power className="h-4 w-4" />
+        {running ? "Arrêter le serveur" : "Démarrer le serveur"}
+      </Button>
+    </Card>
+  );
+}
+
+function ServerStatusBadge({ running }: { running: boolean }) {
+  if (running) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-success-500)]/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--color-success-500)]">
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="absolute inset-0 animate-ping rounded-full bg-[var(--color-success-500)] opacity-60" />
+          <span className="relative inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-success-500)]" />
+        </span>
+        En ligne
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-bg-overlay)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+      <Circle className="h-1.5 w-1.5 fill-current" />
+      Arrêté
+    </span>
+  );
+}
+
+function RunningServerInfo({
+  session,
+}: {
+  session: ServerSession & { kind: "running" };
+}) {
+  const exposed = session.bind === "0.0.0.0";
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="grid grid-cols-[max-content_1fr] items-baseline gap-x-3 gap-y-1.5 text-xs">
+        <span className="text-[var(--color-text-muted)]">Bind</span>
+        <span className="font-mono">
+          {session.bind}:{session.port}
+        </span>
+        <span className="text-[var(--color-text-muted)]">PID</span>
+        <span className="font-mono">{session.pid}</span>
+        <span className="text-[var(--color-text-muted)]">Démarré</span>
+        <span>{formatStartedAt(session.startedAt)}</span>
+      </div>
+
+      {exposed && (
+        <p className="rounded-md bg-[var(--color-bg-overlay)] p-2 text-[11px] leading-snug text-[var(--color-text-secondary)]">
+          Tes amis peuvent te rejoindre via <span className="font-mono">&lt;ton-ip-publique&gt;:{session.port}</span>.
+          {" "}
+          Forward le port <span className="font-mono">{session.port}/UDP</span> sur ton routeur pour Internet, sinon ils accéderont seulement via le LAN.
+        </p>
+      )}
     </div>
   );
 }

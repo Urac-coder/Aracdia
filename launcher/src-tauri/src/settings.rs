@@ -21,9 +21,19 @@ const SERVER_ADDR_MAX: usize = 253; // RFC 1035 max DNS name length
 
 /// Default values used both as fallbacks and as the "reset" target.
 const DEFAULT_MEMORY_MB: u32 = 2048;
+/// Default address for a *remote* server (e.g. a future VPS). Empty means
+/// "use the launcher-managed local server".
 const DEFAULT_SERVER_ADDRESS: &str = "";
 const DEFAULT_SERVER_PORT: u16 = 30_000;
-const DEFAULT_AUTO_CONNECT: bool = false;
+/// The launcher always auto-connects to the configured server (local or
+/// remote). The Luanti main menu is never shown to the player.
+const DEFAULT_AUTO_CONNECT: bool = true;
+/// Default port the launcher-managed local server listens on.
+const DEFAULT_LOCAL_SERVER_PORT: u16 = 30_000;
+/// Default bind address: all interfaces, so LAN friends can join immediately
+/// (Internet still requires port forwarding or a tunnel — documented in the
+/// "Server" panel of the launcher).
+const DEFAULT_LOCAL_SERVER_BIND: &str = "0.0.0.0";
 /// Default manifest URL: the GitHub Releases API "latest" endpoint of the
 /// `aracdia-engine` repo. Configurable so users/devs can point the launcher
 /// at a custom fork while iterating on engine builds.
@@ -59,6 +69,14 @@ pub struct LauncherSettings {
     /// Releases under this endpoint are filtered by tag prefix `game-v`.
     #[serde(default = "default_content_manifest_url")]
     pub content_manifest_url: String,
+    /// Port for the launcher-managed local Aracdia server.
+    #[serde(default = "default_local_server_port")]
+    pub local_server_port: u16,
+    /// Bind address for the local server. `0.0.0.0` exposes it on the LAN
+    /// (and on Internet if the user forwards the port). `127.0.0.1` keeps
+    /// it strictly local to the machine.
+    #[serde(default = "default_local_server_bind")]
+    pub local_server_bind: String,
 }
 
 fn default_manifest_url() -> String {
@@ -67,6 +85,14 @@ fn default_manifest_url() -> String {
 
 fn default_content_manifest_url() -> String {
     DEFAULT_CONTENT_MANIFEST_URL.to_owned()
+}
+
+fn default_local_server_port() -> u16 {
+    DEFAULT_LOCAL_SERVER_PORT
+}
+
+fn default_local_server_bind() -> String {
+    DEFAULT_LOCAL_SERVER_BIND.to_owned()
 }
 
 impl Default for LauncherSettings {
@@ -79,6 +105,8 @@ impl Default for LauncherSettings {
             install_dir: None,
             manifest_url: default_manifest_url(),
             content_manifest_url: default_content_manifest_url(),
+            local_server_port: default_local_server_port(),
+            local_server_bind: default_local_server_bind(),
         }
     }
 }
@@ -137,6 +165,16 @@ fn validate(settings: &LauncherSettings) -> Result<(), SettingsError> {
         || settings.content_manifest_url.starts_with("http://"))
     {
         return Err(SettingsError::Invalid("content_manifest_url must be http(s)"));
+    }
+    if settings.local_server_port < PORT_MIN || settings.local_server_port > PORT_MAX {
+        return Err(SettingsError::Invalid("local_server_port is out of range"));
+    }
+    let bind = settings.local_server_bind.trim();
+    if bind.is_empty() {
+        return Err(SettingsError::Invalid("local_server_bind is empty"));
+    }
+    if bind.parse::<std::net::IpAddr>().is_err() {
+        return Err(SettingsError::Invalid("local_server_bind must be a valid IP address"));
     }
     Ok(())
 }

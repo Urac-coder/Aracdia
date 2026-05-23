@@ -149,12 +149,49 @@ export function SettingsScreen({ onBack }: SettingsScreenProps) {
 
           <SettingsSection
             icon={<ServerCog className="h-4 w-4" />}
-            title="Serveur par défaut"
-            description="Adresse utilisée par le bouton JOUER."
+            title="Serveur Aracdia local"
+            description="Le launcher démarre automatiquement un serveur sur ta machine. JOUER te connecte directement dessus."
           >
-            <Field label="Adresse" error={errors.serverAddress}>
+            <Field
+              label="Port d'écoute"
+              hint={`${SETTINGS_RULES.portMin}–${SETTINGS_RULES.portMax}. Ouvre ce port sur ton routeur si tu veux que tes amis te rejoignent depuis Internet.`}
+              error={errors.localServerPort}
+            >
               <Input
-                placeholder="play.aracdia.example (laisser vide = solo)"
+                type="number"
+                inputMode="numeric"
+                min={SETTINGS_RULES.portMin}
+                max={SETTINGS_RULES.portMax}
+                invalid={!!errors.localServerPort}
+                value={settings.localServerPort}
+                onChange={(e) => update("localServerPort", Number(e.currentTarget.value))}
+                className="max-w-[160px]"
+              />
+            </Field>
+
+            <Field
+              label="Adresse de bind"
+              hint="0.0.0.0 = accessible sur ton LAN et Internet (avec port forwarding). 127.0.0.1 = solo strict."
+              error={errors.localServerBind}
+            >
+              <Input
+                placeholder="0.0.0.0"
+                invalid={!!errors.localServerBind}
+                value={settings.localServerBind}
+                onChange={(e) => update("localServerBind", e.currentTarget.value)}
+                className="max-w-[200px]"
+              />
+            </Field>
+          </SettingsSection>
+
+          <SettingsSection
+            icon={<Globe className="h-4 w-4" />}
+            title="Serveur distant (optionnel)"
+            description="À renseigner uniquement quand un vrai serveur Aracdia hébergé sera disponible. Tant que c'est vide, le launcher utilise le serveur local ci-dessus."
+          >
+            <Field label="Adresse du serveur" error={errors.serverAddress}>
+              <Input
+                placeholder="play.aracdia.example (laisser vide pour utiliser le serveur local)"
                 invalid={!!errors.serverAddress}
                 value={settings.serverAddress}
                 onChange={(e) => update("serverAddress", e.currentTarget.value)}
@@ -162,7 +199,11 @@ export function SettingsScreen({ onBack }: SettingsScreenProps) {
               />
             </Field>
 
-            <Field label="Port" hint={`${SETTINGS_RULES.portMin}–${SETTINGS_RULES.portMax}`} error={errors.serverPort}>
+            <Field
+              label="Port"
+              hint={`${SETTINGS_RULES.portMin}–${SETTINGS_RULES.portMax}`}
+              error={errors.serverPort}
+            >
               <Input
                 type="number"
                 inputMode="numeric"
@@ -174,13 +215,6 @@ export function SettingsScreen({ onBack }: SettingsScreenProps) {
                 className="max-w-[160px]"
               />
             </Field>
-
-            <Toggle
-              label="Connexion automatique"
-              description="Au lancement, se connecter directement au serveur configuré."
-              checked={settings.autoConnect}
-              onChange={(checked) => update("autoConnect", checked)}
-            />
           </SettingsSection>
 
           <SettingsSection
@@ -283,41 +317,3 @@ function Field({ label, hint, error, children }: FieldProps) {
   );
 }
 
-interface ToggleProps {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}
-
-function Toggle({ label, description, checked, onChange }: ToggleProps) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="flex w-full items-center justify-between gap-4 rounded-lg p-3 text-left transition-colors hover:bg-white/[0.03]"
-    >
-      <div>
-        <div className="text-sm font-medium text-[var(--color-text-primary)]">{label}</div>
-        {description ? (
-          <div className="mt-0.5 text-xs text-[var(--color-text-secondary)]">{description}</div>
-        ) : null}
-      </div>
-      <span
-        className={
-          "relative inline-block h-6 w-11 shrink-0 rounded-full transition-colors " +
-          (checked ? "bg-[var(--color-accent-600)]" : "bg-[var(--color-bg-overlay)]")
-        }
-      >
-        <span
-          className={
-            "absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform " +
-            (checked ? "translate-x-5" : "translate-x-0")
-          }
-        />
-      </span>
-    </button>
-  );
-}

@@ -49,6 +49,8 @@ pub enum LaunchError {
     Profile(String),
     #[error("game deploy error: {0}")]
     Game(String),
+    #[error("local server error: {0}")]
+    Server(String),
 }
 
 impl From<LaunchError> for String {
@@ -197,25 +199,33 @@ pub fn strip_quarantine(path: &Path) {
 // Argument building
 // ---------------------------------------------------------------------------
 
-fn build_args(settings: &LauncherSettings, username: &str, gameid: &str) -> Vec<String> {
-    let mut args = vec![
-        // Force the engine into our game so the user never sees the bare
-        // Luanti menu.
-        "--gameid".to_owned(),
-        gameid.to_owned(),
-        // Username forwarded to the engine for both menu prefill and direct connect
+/// Always builds args that connect the client straight to a server and skip
+/// the Luanti main menu (`--go`). Two routing modes:
+///
+/// 1. **Remote**: when `settings.server_address` is non-empty, that address
+///    wins. The launcher does not need a local server running. Used to point
+///    the launcher at a future hosted Aracdia VPS — the rest of the launcher
+///    is unaffected.
+/// 2. **Local**: when `server_address` is empty, the client connects to
+///    `127.0.0.1:<local_server_port>` — the launcher-managed local server.
+///
+/// Either way: no menu, no "create world", no "join other server".
+fn build_args(settings: &LauncherSettings, username: &str) -> Vec<String> {
+    let remote = settings.server_address.trim();
+    let (host, port) = if !remote.is_empty() {
+        (remote.to_owned(), settings.server_port)
+    } else {
+        ("127.0.0.1".to_owned(), settings.local_server_port)
+    };
+    vec![
         "--name".to_owned(),
         username.to_owned(),
-    ];
-    let address = settings.server_address.trim();
-    if !address.is_empty() && settings.auto_connect {
-        args.push("--address".to_owned());
-        args.push(address.to_owned());
-        args.push("--port".to_owned());
-        args.push(settings.server_port.to_string());
-        args.push("--go".to_owned());
-    }
-    args
+        "--address".to_owned(),
+        host,
+        "--port".to_owned(),
+        port.to_string(),
+        "--go".to_owned(),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +277,7 @@ fn read_session_file() -> Option<RunningSession> {
 
 /// Strips an executable suffix and lower-cases the basename so that names like
 /// "luanti", "luanti.exe", "Luanti" all compare equal.
-fn normalize_exec_name(name: &str) -> String {
+pub(crate) fn normalize_exec_name(name: &str) -> String {
     let lower = name.to_lowercase();
     lower
         .strip_suffix(".exe")
@@ -277,7 +287,7 @@ fn normalize_exec_name(name: &str) -> String {
 
 /// Returns true iff a process at `pid` is alive AND its executable basename
 /// matches `expected_name` (case-insensitively, after stripping `.exe`).
-fn pid_alive_with_name(pid: u32, expected_name: &str) -> bool {
+pub(crate) fn pid_alive_with_name(pid: u32, expected_name: &str) -> bool {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
@@ -294,7 +304,7 @@ fn pid_alive_with_name(pid: u32, expected_name: &str) -> bool {
 }
 
 /// Best-effort kill via sysinfo. Returns true on apparent success.
-fn kill_pid(pid: u32) -> bool {
+pub(crate) fn kill_pid(pid: u32) -> bool {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
@@ -397,7 +407,17 @@ pub async fn launch_engine(
         deployed.source_dir.display(),
         deployed.deployed_dir.display(),
     );
-    let args = build_args(&settings, &username, &deployed.gameid);
+
+    // Make sure a server is reachable. If the user didn't override
+    // `server_address`, that means a launcher-managed local server — start
+    // it on demand.
+    if settings.server_address.trim().is_empty() {
+        crate::server::ensure_started(&app)
+            .await
+            .map_err(|e| LaunchError::Server(e.to_string()))?;
+    }
+
+    let args = build_args(&settings, &username);
 
     let cwd = engine_dir.clone();
 
@@ -546,34 +566,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_args_includes_gameid_and_name() {
+    fn build_args_local_server_default() {
+        // Empty server_address → connect to the launcher-managed local server.
         let s = LauncherSettings::default();
-        let args = build_args(&s, "Aragorn", "aracdia");
-        assert!(args.windows(2).any(|w| w == ["--gameid", "aracdia"]));
-        assert!(args.windows(2).any(|w| w == ["--name", "Aragorn"]));
-        assert!(!args.iter().any(|a| a == "--address"));
-    }
-
-    #[test]
-    fn build_args_with_auto_connect() {
-        let mut s = LauncherSettings::default();
-        s.server_address = "play.example.com".to_owned();
-        s.server_port = 30000;
-        s.auto_connect = true;
-        let args = build_args(&s, "U", "aracdia");
+        let args = build_args(&s, "Aragorn");
         assert!(args.iter().any(|a| a == "--go"));
-        assert!(args.windows(2).any(|w| w == ["--address", "play.example.com"]));
-        assert!(args.windows(2).any(|w| w == ["--port", "30000"]));
+        assert!(args.windows(2).any(|w| w == ["--name", "Aragorn"]));
+        assert!(args.windows(2).any(|w| w == ["--address", "127.0.0.1"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--port", &s.local_server_port.to_string()]));
+        // No --gameid on the client (the server owns it)
+        assert!(!args.iter().any(|a| a == "--gameid"));
     }
 
     #[test]
-    fn build_args_no_go_without_auto_connect() {
+    fn build_args_remote_server_takes_precedence() {
         let mut s = LauncherSettings::default();
-        s.server_address = "play.example.com".to_owned();
-        s.auto_connect = false;
-        let args = build_args(&s, "U", "aracdia");
-        assert!(!args.iter().any(|a| a == "--address"));
-        assert!(!args.iter().any(|a| a == "--go"));
+        s.server_address = "play.aracdia.example".to_owned();
+        s.server_port = 31337;
+        let args = build_args(&s, "U");
+        assert!(args.iter().any(|a| a == "--go"));
+        assert!(args.windows(2).any(|w| w == ["--address", "play.aracdia.example"]));
+        assert!(args.windows(2).any(|w| w == ["--port", "31337"]));
+    }
+
+    #[test]
+    fn build_args_remote_server_ignores_whitespace() {
+        let mut s = LauncherSettings::default();
+        s.server_address = "   ".to_owned();
+        let args = build_args(&s, "U");
+        // Falls back to local
+        assert!(args.windows(2).any(|w| w == ["--address", "127.0.0.1"]));
     }
 
     #[test]

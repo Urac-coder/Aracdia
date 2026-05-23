@@ -108,3 +108,31 @@ pub fn luanti_user_dir() -> Result<PathBuf, std::io::Error> {
 pub fn luanti_user_games_dir() -> Result<PathBuf, std::io::Error> {
     Ok(luanti_user_dir()?.join("games"))
 }
+
+/// Returns the persistent world directory used by the launcher-managed local
+/// server. Lives under the launcher data dir (NOT the Luanti user dir) so it
+/// is isolated from any worlds the user may have created with the vanilla
+/// engine.
+pub fn world_dir() -> Result<PathBuf, std::io::Error> {
+    let dir = data_dir()?.join("worlds").join("aracdia");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Path of the server session metadata file (PID, log path, port, …).
+pub fn server_session_file() -> Result<PathBuf, std::io::Error> {
+    Ok(data_dir()?.join("server-session.json"))
+}
+
+/// Path of the launcher-managed server's minetest.conf overrides. Re-written
+/// on every spawn from the current launcher settings (bind_address, port).
+pub fn server_conf_file() -> Result<PathBuf, std::io::Error> {
+    Ok(data_dir()?.join("server.conf"))
+}
+
+/// Returns the directory used to store rolling server logs.
+pub fn server_log_dir() -> Result<PathBuf, std::io::Error> {
+    let dir = data_dir()?.join("logs").join("server");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}

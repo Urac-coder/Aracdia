@@ -7,6 +7,7 @@ mod game;
 mod launch;
 mod paths;
 mod profile;
+mod server;
 mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -16,6 +17,31 @@ pub fn run() {
         .manage(engine::EngineLock::default())
         .manage(content::ContentLock::default())
         .manage(launch::LaunchState::default())
+        .manage(server::ServerState::default())
+        .setup(|app| {
+            // Try to auto-start the local server in the background as soon as
+            // the launcher boots. We don't block startup on it: if the engine
+            // isn't installed yet, this will fail and the user will trigger
+            // the install pipeline by clicking JOUER, which will retry.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match server::ensure_started(&handle).await {
+                    Ok(info) => {
+                        eprintln!(
+                            "[launcher] local server up: pid={} bind={} port={}",
+                            info.pid, info.bind, info.port
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[launcher] could not auto-start local server: {err}. \
+                             Will retry on JOUER once the engine is installed."
+                        );
+                    }
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             profile::load_profile,
             profile::save_profile,
@@ -35,6 +61,9 @@ pub fn run() {
             launch::stop_engine,
             launch::is_engine_running,
             launch::current_session,
+            server::start_server,
+            server::stop_server,
+            server::server_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aracdia launcher");
