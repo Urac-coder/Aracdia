@@ -50,9 +50,9 @@ npm run tauri build    # produces a signed bundle in src-tauri/target/release/bu
 - [x] **Step 1** — Offline login + home UI
 - [x] **Step 2** — Persisted settings (memory, server, install dir, manifest URL)
 - [x] **Step 3a** — Engine pipeline: download + SHA-256 verification + zip extract + auto-install at "Play"
-- [ ] **Step 3b** — Create `aracdia-engine` repo (fork Luanti) — see [`docs/CREATE_ARACDIA_ENGINE.md`](docs/CREATE_ARACDIA_ENGINE.md)
+- [x] **Step 3b** — `aracdia-engine` repo created at [`Urac-coder/aracdia-engine`](https://github.com/Urac-coder/aracdia-engine) with a CI release workflow producing zips for macOS arm64, Linux x64 and Windows x64 (see [`docs/CREATE_ARACDIA_ENGINE.md`](docs/CREATE_ARACDIA_ENGINE.md))
+- [x] **Step 5** — Engine spawn (subprocess) with stdout/stderr capture, rolling log file, macOS quarantine handling, single-process invariant, "Quitter le jeu" UI
 - [ ] **Step 4** — Game content download + extraction
-- [ ] **Step 5** — Engine spawn (subprocess) with proper args
 - [ ] **Step 6** — Launcher self-update (Tauri Updater + Ed25519 signing)
 - [ ] **Step 7** — Polish (settings, error states, telemetry)
 - [ ] **Step 8** — Game `mods/` (Lua): weight inventory, MOBA-like spells, custom UI
