@@ -1,13 +1,8 @@
--- Creative inventory (Build Mode only).
+-- Construction block picker (build mode only).
 --
--- A paginated formspec that lists every registered item with a known
--- description, hiding the ones flagged `not_in_creative_inventory = 1`.
--- Searching narrows by substring in the technical name OR in the
--- description.
---
--- Click an item → 99 of it lands in the player's main inventory. Combined
--- with the `register_on_placenode` refund hook, this gives an effectively
--- infinite supply.
+-- Opened from the player inventory via the "Blocs construction" button.
+-- Click an item to add a stack to the main inventory; combined with the
+-- placenode refund hook blocks are effectively unlimited in build mode.
 
 local C = {}
 aracdia_menu.creative = C
@@ -65,7 +60,7 @@ local function render(name, query, page)
         "bgcolor[#0008;true]",
         ("box[0.4,0.4;%f,%f;#161B22]"):format(W - 0.8, H - 0.8),
         "style_type[label;textcolor=#E6EDF3]",
-        "label[0.7,1.0;Inventaire créatif]",
+        "label[0.7,1.0;Blocs construction]",
         "style_type[label;textcolor=#8B949E;font_size=12]",
         ("label[0.7,1.5;Page %d / %d  ·  %d résultat%s]"):format(
             page, total_pages, total, total > 1 and "s" or ""
@@ -79,7 +74,7 @@ local function render(name, query, page)
         "style[clear;bgcolor=#21262D;textcolor=#E6EDF3]",
         "button[8.7,2.1;1.6,0.8;clear;Effacer]",
         "style[back;bgcolor=#21262D;textcolor=#E6EDF3]",
-        "button[10.5,2.1;1.6,0.8;back;Retour]",
+        "button[10.5,2.1;1.6,0.8;back;Fermer]",
     }
 
     local start_i = (page - 1) * PER_PAGE + 1
@@ -125,7 +120,7 @@ function C.show(player, query, page)
     if not aracdia_menu.build_mode.is_on(name) then
         core.chat_send_player(
             name,
-            "[Aracdia] L'inventaire créatif n'est accessible qu'en Mode construction."
+            "[Aracdia] Les blocs construction ne sont disponibles qu'en Mode construction."
         )
         return
     end
@@ -140,11 +135,8 @@ core.register_on_player_receive_fields(function(player, formname, fields)
     local name = player:get_player_name()
     local s = aracdia_menu.state.get(name)
 
-    if fields.quit then
-        return true
-    end
-    if fields.back then
-        aracdia_menu.menu.show(player)
+    if fields.back or fields.quit then
+        core.close_formspec(name, FORM_INV)
         return true
     end
     if fields.search then
@@ -173,11 +165,13 @@ core.register_on_player_receive_fields(function(player, formname, fields)
             if item_name then
                 local inv = player:get_inventory()
                 if inv then
-                    inv:add_item("main", ItemStack(item_name .. " 99"))
-                    core.chat_send_player(
-                        name,
-                        ("[Aracdia] +99 %s"):format(item_name)
-                    )
+                    local leftover = inv:add_item("main", ItemStack(item_name .. " 64"))
+                    if not leftover:is_empty() then
+                        core.chat_send_player(name,
+                            "[Aracdia] Inventaire plein — libere un emplacement.")
+                    end
+                    -- Keep the picker open so the player can grab several blocks.
+                    C.show(player, s.creative_query, s.creative_page)
                 end
             end
             return true

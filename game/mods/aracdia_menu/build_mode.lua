@@ -4,8 +4,7 @@
 --   * fly      — "K" by default
 --   * fast     — "J" by default
 --   * noclip   — "H" by default
---   * creative — recognised by some hooks; we still implement the powers
---                ourselves so we don't depend on engine globals
+--   * creative — not granted; construction blocks come from the inventory picker
 --
 -- Powers wired up here (regardless of the world's `creative_mode` setting):
 --   1. Invincibility — a `register_on_player_hpchange` modifier that swallows
@@ -22,7 +21,7 @@ local B = {}
 aracdia_menu.build_mode = B
 
 local META_KEY = "aracdia_build_mode"
-local PRIVS = { fly = true, fast = true, noclip = true, creative = true }
+local PRIVS = { fly = true, fast = true, noclip = true }
 
 --- Whether `name` is currently in Build Mode.
 function B.is_on(name)
@@ -48,9 +47,13 @@ function B.set(player, enabled)
     core.chat_send_player(
         name,
         enabled
-            and "[Aracdia] Mode construction activé — vol/vitesse/traverser/instabreak/invincibilité"
-            or "[Aracdia] Mode construction désactivé"
+            and "[Aracdia] Mode construction — vol/vitesse/traverser/instabreak/invincibilite. Blocs via Inventaire (I) > Blocs construction."
+            or "[Aracdia] Mode combat active."
     )
+
+    if aracdia_menu.inventory then
+        aracdia_menu.inventory.apply(player)
+    end
 end
 
 --- Restore the persisted build_mode on join (and re-apply the privs in case

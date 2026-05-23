@@ -1,8 +1,8 @@
 -- Aracdia main menu — formspec rendering and event dispatch.
 --
--- Visual identity aligned with the Tauri launcher: dark surfaces, indigo
--- accent, 9-slice textures for readable buttons (plain bgcolor alone is
--- too subtle on the engine's default formspec renderer).
+-- Luanti labels ignore halign=center on this engine fork; action buttons do
+-- not. Header title/subtitle are therefore rendered as transparent, non-
+-- interactive buttons so they share the same centring path as "Reprendre".
 
 local M = {}
 aracdia_menu.menu = M
@@ -10,123 +10,143 @@ aracdia_menu.menu = M
 local FORM_MAIN = "aracdia_menu:main"
 M.FORM_MAIN = FORM_MAIN
 
--- 9-slice margin shared by all UI textures (see gen_placeholders.py).
-local SLICE = 4
-
--- Launcher design tokens.
 local C = {
-    backdrop    = "#0A0A0FCC",
-    text        = "#F5F5FA",
-    text_dim    = "#A8A8B8",
-    text_muted  = "#6A6A78",
-    accent      = "#818CF8",
-    success     = "#34D399",
-    danger      = "#F87171",
+    backdrop   = "#0A0A0FCC",
+    shell      = "aracdia_ui_shell.png",
+
+    text       = "#F5F5FA",
+    text_dim   = "#A8A8B8",
+    title      = "#E0E7FF",
+    rule       = "#2A2A38",
+
+    btn_pri    = "#6366F1",
+    btn_pri_h  = "#818CF8",
+    btn_pri_p  = "#4F46E5",
+
+    btn_sec    = "#1A1A26",
+    btn_sec_h  = "#22222E",
+
+    btn_on     = "#14532D",
+    btn_on_h   = "#166534",
+    btn_on_fg  = "#6EE7B7",
+
+    danger     = "#F87171",
+    danger_h   = "#FCA5A5",
 }
 
-local T = {
-    panel      = "aracdia_ui_panel.png",
-    header     = "aracdia_ui_header.png",
-    divider    = "aracdia_ui_divider.png",
-    primary    = "aracdia_ui_btn_primary.png",
-    primary_h  = "aracdia_ui_btn_primary_h.png",
-    primary_p  = "aracdia_ui_btn_primary_p.png",
-    secondary  = "aracdia_ui_btn_secondary.png",
-    secondary_h = "aracdia_ui_btn_secondary_h.png",
-    success    = "aracdia_ui_btn_success.png",
-    success_h  = "aracdia_ui_btn_success_h.png",
-    danger     = "aracdia_ui_btn_danger.png",
-    danger_h   = "aracdia_ui_btn_danger_h.png",
-    disabled   = "aracdia_ui_btn_disabled.png",
-}
+local TRANSPARENT = "#00000000"
 
---- Apply 9-slice button styling for `id`.
-local function style_button(fs, id, normal, hovered, pressed, textcolor)
-    fs[#fs + 1] = ("style[%s;bgimg=%s;bgimg_hovered=%s;bgimg_pressed=%s;bgimg_middle=%d;border=false;bgcolor=#00000000;textcolor=%s]")
-        :format(id, normal, hovered, pressed, SLICE, textcolor)
+local PX      = 0.52
+local PY      = 0.56
+local W       = 7.2
+local INNER   = W - 2 * PX
+local SLICE   = 24
+
+local BTN_H   = 0.68
+local ROW_GAP = 0.18
+local RULE_H  = 0.02
+
+local function solid_btn(fs, id, bg, bg_h, bg_p, fg)
+    fs[#fs + 1] = ("style[%s;bgcolor=%s;textcolor=%s;border=false;halign=center;font_size=+14]")
+        :format(id, bg, fg)
+    fs[#fs + 1] = ("style[%s:hovered;bgcolor=%s;textcolor=%s;border=false;halign=center]")
+        :format(id, bg_h, fg)
+    fs[#fs + 1] = ("style[%s:pressed;bgcolor=%s;textcolor=%s;border=false;halign=center]")
+        :format(id, bg_p, fg)
 end
 
---- Builds the formspec string for the main menu.
+local function text_row(fs, id, y, h, text, color, size, bold)
+    local weight = bold and "bold" or "normal"
+    fs[#fs + 1] = ("style[%s;bgcolor=%s;border=false;noselect=true;textcolor=%s;halign=center;font=%s;font_size=%s]")
+        :format(id, TRANSPARENT, color, weight, size)
+    fs[#fs + 1] = ("style[%s:hovered;bgcolor=%s;border=false;textcolor=%s;halign=center]")
+        :format(id, TRANSPARENT, color)
+    fs[#fs + 1] = ("style[%s:pressed;bgcolor=%s;border=false;textcolor=%s;halign=center]")
+        :format(id, TRANSPARENT, color)
+    fs[#fs + 1] = ("button[%f,%f;%f,%f;%s;%s]"):format(PX, y, INNER, h, id, text)
+end
+
+local function hrule(fs, y)
+    fs[#fs + 1] = ("box[%f,%f;%f,%f;%s]"):format(PX, y, INNER, RULE_H, C.rule)
+end
+
+--- Label for the build/combat toggle — shows the mode you switch *to*.
+local function mode_toggle_label(build)
+    return build and "Mode combat" or "Mode construction"
+end
+
 local function render(name)
     local build = aracdia_menu.build_mode.is_on(name)
 
-    local W, H = 8.2, 6.6
-    local pad_x = 0.35
-    local inner_w = W - 2 * pad_x
-    local btn_h = 0.82
-    local cx = W / 2
+    local title_y = PY + 0.10
+    local title_h = 0.55
+    local sub_y   = title_y + title_h + 0.14
+    local sub_h   = 0.40
+
+    local y = sub_y + sub_h + 0.28
+
+    local rule1_y = y
+    y = y + RULE_H + 0.26
+
+    local btn1_y = y
+    y = y + BTN_H + ROW_GAP
+
+    local btn2_y = y
+    y = y + BTN_H + 0.32
+
+    local rule2_y = y
+    y = y + RULE_H + 0.22
+
+    local quit_y = y
+    y = y + 0.56
+
+    local H = y + PY
 
     local fs = {
         "formspec_version[7]",
         ("size[%f,%f]"):format(W, H),
+        "position[0.5,0.5]",
+        "anchor[0.5,0.5]",
+        "padding[0.06,0.06]",
         ("bgcolor[%s;true]"):format(C.backdrop),
         "no_prepend[]",
 
-        -- Card surface (9-slice panel).
-        ("background9[0,0;%f,%f;%s;false;%d]"):format(W, H, T.panel, SLICE),
-
-        -- Accent strip under the title block.
-        ("background9[%f,0.42;%f,0.22;%s;false;2]"):format(pad_x + 0.05, inner_w - 0.1, T.header),
-
-        -- Header — centred, no unicode clutter.
-        ("style[hdr_title;textcolor=%s;font=bold;font_size=+22;halign=center]"):format(C.accent),
-        ("label[%f,0.72;ARACDIA]"):format(cx),
-        ("style[hdr_sub;textcolor=%s;font=normal;font_size=+12;halign=center]"):format(C.text_dim),
-        ("label[%f,1.18;Menu du jeu]"):format(cx),
-
-        -- Separator below header.
-        ("background9[%f,1.62;%f,0.06;%s;false;1]"):format(pad_x, inner_w, T.divider),
-
-        "style_type[button;font_size=+14]",
-        "style_type[label;font=normal;font_size=+14]",
+        ("background9[0,0;%f,%f;%s;false;%d]"):format(W, H, C.shell, SLICE),
     }
 
-    local function button(y, id, label, kind)
-        if kind == "primary" then
-            style_button(fs, id, T.primary, T.primary_h, T.primary_p, C.text)
-        elseif kind == "success" then
-            style_button(fs, id, T.success, T.success_h, T.success, C.success)
-        elseif kind == "danger" then
-            style_button(fs, id, T.danger, T.danger_h, T.danger, C.danger)
-        elseif kind == "disabled" then
-            style_button(fs, id, T.disabled, T.disabled, T.disabled, C.text_muted)
-        else
-            style_button(fs, id, T.secondary, T.secondary_h, T.secondary, C.text)
-        end
-        fs[#fs + 1] = ("button[%f,%f;%f,%f;%s;%s]"):format(pad_x, y, inner_w, btn_h, id, label)
-    end
+    text_row(fs, "hdr_title", title_y, title_h, "ARACDIA", C.title, "+22", true)
+    text_row(fs, "hdr_sub", sub_y, sub_h, "Menu du jeu", C.text_dim, "+12", false)
 
-    local y = 1.88
-    local gap = 0.14
+    hrule(fs, rule1_y)
 
-    button(y, "resume", "Reprendre", "primary")
-    y = y + btn_h + gap
-
-    button(y, "build_toggle", "Mode construction", build and "success" or "secondary")
-    y = y + btn_h + gap
+    solid_btn(fs, "resume", C.btn_pri, C.btn_pri_h, C.btn_pri_p, C.text)
+    fs[#fs + 1] = ("button[%f,%f;%f,%f;resume;Reprendre]"):format(PX, btn1_y, INNER, BTN_H)
 
     if build then
-        button(y, "creative_inv", "Inventaire creatif", "secondary")
+        solid_btn(fs, "build_toggle", C.btn_on, C.btn_on_h, C.btn_on, C.btn_on_fg)
     else
-        button(y, "creative_disabled", "Inventaire creatif", "disabled")
+        solid_btn(fs, "build_toggle", C.btn_sec, C.btn_sec_h, C.btn_sec, C.text)
     end
+    fs[#fs + 1] = ("button[%f,%f;%f,%f;build_toggle;%s]"):format(
+        PX, btn2_y, INNER, BTN_H, mode_toggle_label(build))
 
-    -- Bottom separator + destructive action pinned to the card footer.
-    local sep_y = H - 1.35
-    fs[#fs + 1] = ("background9[%f,%f;%f,0.06;%s;false;1]"):format(pad_x, sep_y, inner_w, T.divider)
-    button(sep_y + 0.18, "quit_game", "Quitter le jeu", "danger")
+    hrule(fs, rule2_y)
+
+    fs[#fs + 1] = ("style[quit_game;bgcolor=%s;border=false;textcolor=%s;halign=center;font_size=+13]")
+        :format(TRANSPARENT, C.danger)
+    fs[#fs + 1] = ("style[quit_game:hovered;bgcolor=#EF444418;border=false;textcolor=%s;halign=center]")
+        :format(C.danger_h)
+    fs[#fs + 1] = ("button[%f,%f;%f,0.50;quit_game;Quitter le jeu]"):format(PX, quit_y, INNER)
 
     return table.concat(fs)
 end
 
---- Show the main menu to a player.
 function M.show(player)
     if not player or not player:is_player() then return end
     local name = player:get_player_name()
     core.show_formspec(name, FORM_MAIN, render(name))
 end
 
---- Hide our menu (used by the "Reprendre" button).
 function M.hide(name)
     core.close_formspec(name, FORM_MAIN)
 end
@@ -138,6 +158,9 @@ core.register_on_player_receive_fields(function(player, formname, fields)
     if fields.quit then
         return true
     end
+    if fields.hdr_title or fields.hdr_sub then
+        return true
+    end
     if fields.resume then
         M.hide(name)
         return true
@@ -145,15 +168,6 @@ core.register_on_player_receive_fields(function(player, formname, fields)
     if fields.build_toggle then
         aracdia_menu.build_mode.set(player, not aracdia_menu.build_mode.is_on(name))
         M.show(player)
-        return true
-    end
-    if fields.creative_inv then
-        aracdia_menu.creative.show(player)
-        return true
-    end
-    if fields.creative_disabled then
-        core.chat_send_player(name,
-            "[Aracdia] Active d'abord le Mode construction pour acceder a l'inventaire creatif.")
         return true
     end
     if fields.quit_game then

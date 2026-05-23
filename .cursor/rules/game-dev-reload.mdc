@@ -1,0 +1,22 @@
+---
+description: Auto-reload in-game mods after editing game/ content
+globs: game/**/*
+alwaysApply: false
+---
+
+# Game mod dev reload
+
+After modifying any file under `game/` (Lua mods, textures, menu UI, etc.):
+
+1. Finish the code change.
+2. Run from the repo root:
+
+```bash
+./scripts/dev-reload-game.sh
+```
+
+This syncs `game/` into Luanti's user games directory, stops the current Aracdia client/server, and relaunches both so mod changes are visible without manual steps.
+
+Do **not** skip this step when the user expects to see in-game UI or mod changes immediately.
+
+Requirements: engine installed via the launcher (JOUER clicked at least once) and a saved offline profile.

@@ -181,40 +181,6 @@ TEXTURES: dict[str, PixelFn] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# In-game UI textures (aracdia_menu mod) — launcher-aligned indigo palette
-# ---------------------------------------------------------------------------
-
-def _inside_rounded_rect(x: int, y: int, w: int, h: int, radius: int) -> bool:
-    if x < 0 or y < 0 or x >= w or y >= h:
-        return False
-    r = min(radius, w // 2, h // 2)
-    if r <= 0:
-        return True
-    if r <= x < w - r and r <= y < h - r:
-        return True
-    if x < r and r <= y < h - r:
-        return True
-    if w - r <= x and r <= y < h - r:
-        return True
-    if r <= x < w - r and y < r:
-        return True
-    if r <= x < w - r and y >= h - r:
-        return True
-    for cx, cy in ((r, r), (w - r - 1, r), (r, h - r - 1), (w - r - 1, h - r - 1)):
-        if (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
-            return True
-    return False
-
-
-def _edge_distance(x: int, y: int, w: int, h: int, radius: int) -> int:
-    """Chebyshev-ish distance to the rounded-rect border (0 = on edge)."""
-    if not _inside_rounded_rect(x, y, w, h, radius):
-        return -1
-    r = min(radius, w // 2, h // 2)
-    return min(x, y, w - 1 - x, h - 1 - y)
-
-
 def _lerp(a: int, b: int, t: float) -> int:
     return int(a * (1 - t) + b * t)
 
@@ -223,148 +189,312 @@ def _lerp_rgba(a: RGBA, b: RGBA, t: float) -> RGBA:
     return tuple(_lerp(a[i], b[i], t) for i in range(4))  # type: ignore[return-value]
 
 
-def ui_rounded(
-    fill: RGBA,
+# ---------------------------------------------------------------------------
+# In-game UI textures (aracdia_menu mod)
+#
+# Smooth SDF-based assets at high resolution. Low-res pixel 9-slices looked
+# awful once scaled by the engine — these are anti-aliased and noise-free.
+# ---------------------------------------------------------------------------
+
+def _sdf_rounded_rect(px: float, py: float, w: float, h: float, r: float) -> float:
+    """Signed distance to a rounded-rect border (negative = inside)."""
+    r = min(r, w / 2, h / 2)
+    cx = max(r, min(px, w - r))
+    cy = max(r, min(py, h - r))
+    dx = px - cx
+    dy = py - cy
+    dist_corner = (dx * dx + dy * dy) ** 0.5 - r
+    if r <= px <= w - r and py < r:
+        return py - r
+    if r <= px <= w - r and py > h - r:
+        return h - r - py
+    if r <= py <= h - r and px < r:
+        return px - r
+    if r <= py <= h - r and px > w - r:
+        return w - r - px
+    return dist_corner
+
+
+def _aa_alpha(dist: float) -> int:
+    """Convert SDF distance to 8-bit alpha (1px soft edge)."""
+    if dist >= 1.0:
+        return 0
+    if dist <= -1.0:
+        return 255
+    return int(max(0, min(255, (-dist + 0.5) * 255)))
+
+
+def _vertical_gradient(y: int, h: int, top: RGBA, bottom: RGBA) -> RGBA:
+    t = y / max(1, h - 1)
+    return _lerp_rgba(top, bottom, t)
+
+
+def ui_sdf_fill(
     *,
-    radius: int = 6,
+    radius: float,
+    fill_top: RGBA,
+    fill_bottom: RGBA,
     border: RGBA | None = None,
-    border_px: int = 1,
-    top_tint: RGBA | None = None,
-    bottom_tint: RGBA | None = None,
-    jitter: int = 0,
-    seed: int = 0,
+    border_width: float = 1.0,
+    glow_top: RGBA | None = None,
 ) -> PixelFn:
-    """Rounded rectangle for 9-slice UI panels and buttons."""
+    """Anti-aliased rounded rectangle."""
 
     def fn(x: int, y: int, w: int, h: int) -> RGBA:
-        if not _inside_rounded_rect(x, y, w, h, radius):
+        px = x + 0.5
+        py = y + 0.5
+        dist = _sdf_rounded_rect(px, py, w, h, radius)
+        if dist >= 1.0:
             return (0, 0, 0, 0)
-        t = y / max(1, h - 1)
-        base = fill
-        if top_tint and bottom_tint:
-            base = _lerp_rgba(top_tint, bottom_tint, t)
-        elif top_tint and t < 0.45:
-            base = _lerp_rgba(top_tint, fill, t / 0.45)
-        if jitter:
-            n = ((x * 92837111) ^ (y * 689287499) ^ (seed * 283923481)) & 0xFFFF
-            bias = int(((n / 0xFFFF) * 2 - 1) * jitter)
-            base = (
-                max(0, min(255, base[0] + bias)),
-                max(0, min(255, base[1] + bias)),
-                max(0, min(255, base[2] + bias)),
-                base[3],
-            )
-        if border and border_px > 0:
-            dist = _edge_distance(x, y, w, h, radius)
-            if 0 <= dist < border_px:
-                mix = 1 - (dist / max(1, border_px))
-                return _lerp_rgba(base, border, mix)
-        return base
+
+        base = _vertical_gradient(y, h, fill_top, fill_bottom)
+        if glow_top and py < h * 0.35:
+            t = 1.0 - (py / max(1.0, h * 0.35))
+            base = _lerp_rgba(base, glow_top, t * 0.35)
+
+        if border and 0.0 <= dist < border_width:
+            mix = 1.0 - (dist / max(0.001, border_width))
+            base = _lerp_rgba(base, border, mix)
+
+        alpha = _aa_alpha(dist)
+        return (base[0], base[1], base[2], alpha)
 
     return fn
 
 
-# Launcher tokens: bg-surface #12121a, accent #6366f1, success #10b981, danger #ef4444
-UI_PANEL = ui_rounded(
-    (18, 18, 26, 255),
-    radius=8,
-    border=(99, 102, 241, 90),
-    border_px=2,
-    jitter=6,
-    seed=40,
-)
-UI_HEADER = lambda x, y, w, h: (  # noqa: E731
-    (99, 102, 241, 220)
-    if y < h // 2
-    else (79, 70, 229, 180)
-    if _inside_rounded_rect(x, y, w, h, 3)
-    else (0, 0, 0, 0)
-)
-UI_DIVIDER = lambda x, y, w, h: (42, 42, 56, 255) if y == h // 2 else (0, 0, 0, 0)  # noqa: E731
+def ui_logo_mark() -> PixelFn:
+    """Launcher-style gradient tile with a white A."""
 
-UI_BTN_PRIMARY = ui_rounded(
-    (99, 102, 241, 255),
-    radius=5,
-    top_tint=(129, 140, 248, 255),
-    bottom_tint=(79, 70, 229, 255),
-)
-UI_BTN_PRIMARY_H = ui_rounded(
-    (129, 140, 248, 255),
-    radius=5,
-    top_tint=(165, 180, 252, 255),
-    bottom_tint=(99, 102, 241, 255),
-)
-UI_BTN_PRIMARY_P = ui_rounded(
-    (67, 56, 202, 255),
-    radius=5,
-    top_tint=(79, 70, 229, 255),
-    bottom_tint=(55, 48, 163, 255),
-)
+    def fn(x: int, y: int, w: int, h: int) -> RGBA:
+        px = x + 0.5
+        py = y + 0.5
+        cx, cy = w / 2, h / 2
+        radius = min(w, h) * 0.42
+        dist = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 - radius
+        if dist >= 1.5:
+            return (0, 0, 0, 0)
+        t = py / max(1, h - 1)
+        fill = _lerp_rgba((99, 102, 241, 255), (124, 58, 237, 255), t)
+        alpha = _aa_alpha(dist)
+        # Simple A glyph in the centre.
+        bitmap = _bitmap_char("A")
+        gh, gw = 7, 5
+        scale = max(2, min(w, h) // 10)
+        gx0 = int(cx - (gw * scale) / 2)
+        gy0 = int(cy - (gh * scale) / 2)
+        if gx0 <= x < gx0 + gw * scale and gy0 <= y < gy0 + gh * scale:
+            bx = (x - gx0) // scale
+            by = (y - gy0) // scale
+            if 0 <= by < gh and 0 <= bx < gw and bitmap[by] & (1 << (gw - 1 - bx)):
+                return (255, 255, 255, alpha)
+        return (fill[0], fill[1], fill[2], alpha)
 
-UI_BTN_SECONDARY = ui_rounded(
-    (26, 26, 37, 255),
-    radius=5,
-    border=(42, 42, 56, 255),
-    border_px=1,
-    jitter=4,
-    seed=41,
-)
-UI_BTN_SECONDARY_H = ui_rounded(
-    (34, 34, 46, 255),
-    radius=5,
-    border=(99, 102, 241, 120),
-    border_px=1,
-)
+    return fn
 
-UI_BTN_SUCCESS = ui_rounded(
-    (16, 46, 36, 255),
-    radius=5,
-    border=(16, 185, 129, 180),
-    border_px=1,
-    top_tint=(22, 78, 58, 255),
-    bottom_tint=(12, 36, 28, 255),
-)
-UI_BTN_SUCCESS_H = ui_rounded(
-    (20, 58, 44, 255),
-    radius=5,
-    border=(52, 211, 153, 200),
-    border_px=1,
+
+def ui_pill(active: bool) -> PixelFn:
+    color = (16, 185, 129, 255) if active else (74, 74, 90, 255)
+    border = (52, 211, 153, 255) if active else (106, 106, 120, 255)
+
+    return ui_sdf_fill(
+        radius=6,
+        fill_top=color,
+        fill_bottom=color,
+        border=border,
+        border_width=0.8,
+    )
+
+
+# Dark glass shell — matches launcher `--color-bg-surface`.
+UI_SHELL = ui_sdf_fill(
+    radius=18,
+    fill_top=(26, 26, 38, 248),
+    fill_bottom=(14, 14, 20, 252),
+    border=(58, 58, 74, 180),
+    border_width=1.2,
+    glow_top=(99, 102, 241, 48),
 )
 
-UI_BTN_DANGER = ui_rounded(
-    (36, 18, 22, 255),
-    radius=5,
-    border=(239, 68, 68, 140),
-    border_px=1,
+UI_BTN_PRIMARY = ui_sdf_fill(
+    radius=10,
+    fill_top=(129, 140, 248, 255),
+    fill_bottom=(79, 70, 229, 255),
+    border=(165, 180, 252, 120),
+    border_width=0.8,
 )
-UI_BTN_DANGER_H = ui_rounded(
-    (52, 22, 28, 255),
-    radius=5,
-    border=(248, 113, 113, 180),
-    border_px=1,
+UI_BTN_PRIMARY_H = ui_sdf_fill(
+    radius=10,
+    fill_top=(165, 180, 252, 255),
+    fill_bottom=(99, 102, 241, 255),
+    border=(199, 210, 254, 160),
+    border_width=0.8,
+)
+UI_BTN_PRIMARY_P = ui_sdf_fill(
+    radius=10,
+    fill_top=(79, 70, 229, 255),
+    fill_bottom=(67, 56, 202, 255),
+    border=(99, 102, 241, 140),
+    border_width=0.8,
 )
 
-UI_BTN_DISABLED = ui_rounded(
-    (16, 16, 22, 255),
-    radius=5,
-    border=(34, 34, 44, 255),
-    border_px=1,
+UI_BTN_GHOST = ui_sdf_fill(
+    radius=10,
+    fill_top=(34, 34, 48, 230),
+    fill_bottom=(24, 24, 34, 240),
+    border=(52, 52, 68, 200),
+    border_width=1.0,
 )
+UI_BTN_GHOST_H = ui_sdf_fill(
+    radius=10,
+    fill_top=(44, 44, 62, 240),
+    fill_bottom=(30, 30, 44, 250),
+    border=(99, 102, 241, 160),
+    border_width=1.0,
+)
+
+UI_BTN_ACTIVE = ui_sdf_fill(
+    radius=10,
+    fill_top=(22, 64, 52, 240),
+    fill_bottom=(14, 42, 34, 250),
+    border=(16, 185, 129, 200),
+    border_width=1.0,
+)
+UI_BTN_ACTIVE_H = ui_sdf_fill(
+    radius=10,
+    fill_top=(28, 82, 64, 250),
+    fill_bottom=(18, 52, 42, 255),
+    border=(52, 211, 153, 220),
+    border_width=1.0,
+)
+
+UI_BTN_DISABLED = ui_sdf_fill(
+    radius=10,
+    fill_top=(22, 22, 30, 180),
+    fill_bottom=(16, 16, 22, 200),
+    border=(40, 40, 52, 140),
+    border_width=0.8,
+)
+
+UI_SLOT = ui_sdf_fill(
+    radius=6,
+    fill_top=(34, 34, 48, 235),
+    fill_bottom=(22, 22, 32, 245),
+    border=(58, 58, 74, 150),
+    border_width=0.9,
+)
+
+def _with_noise(base_fn: PixelFn, jitter: int = 10, seed: int = 7) -> PixelFn:
+    """Subtle parchment grain on top of an SDF fill."""
+
+    def fn(x: int, y: int, w: int, h: int) -> RGBA:
+        c = base_fn(x, y, w, h)
+        if c[3] < 8:
+            return c
+        n = ((x * 92837111) ^ (y * 689287499) ^ (seed * 283923481)) & 0xFFFF
+        bias = ((n / 0xFFFF) * 2 - 1) * jitter
+        return (
+            max(0, min(255, int(c[0] + bias))),
+            max(0, min(255, int(c[1] + bias * 0.8))),
+            max(0, min(255, int(c[2] + bias * 0.6))),
+            c[3],
+        )
+
+    return fn
+
+
+def ui_inv_portrait() -> PixelFn:
+    """Circular portrait frame — Albion-style character medallion."""
+
+    def fn(x: int, y: int, w: int, h: int) -> RGBA:
+        px = x + 0.5
+        py = y + 0.5
+        cx, cy = w / 2, h / 2
+        outer = min(w, h) * 0.46
+        inner = outer - 5.0
+        dist_outer = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 - outer
+        dist_inner = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 - inner
+
+        if dist_outer >= 1.0:
+            return (0, 0, 0, 0)
+
+        ring = dist_inner >= 0.0
+        if ring:
+            t = py / max(1, h - 1)
+            fill = _lerp_rgba((120, 92, 58, 255), (74, 56, 36, 255), t)
+            alpha = _aa_alpha(dist_outer)
+            if dist_inner < 1.0 and dist_inner >= 0.0:
+                mix = 1.0 - dist_inner
+                hi = (196, 165, 116, 255)
+                fill = _lerp_rgba(fill, hi, mix * 0.55)
+            return (fill[0], fill[1], fill[2], alpha)
+
+        t = py / max(1, h - 1)
+        fill = _lerp_rgba((72, 62, 52, 255), (48, 42, 36, 255), t)
+        alpha = _aa_alpha(dist_inner)
+        return (fill[0], fill[1], fill[2], alpha)
+
+    return fn
+
+
+UI_INV_PANEL = _with_noise(
+    ui_sdf_fill(
+        radius=10,
+        fill_top=(196, 165, 116, 255),
+        fill_bottom=(139, 115, 85, 255),
+        border=(61, 47, 31, 255),
+        border_width=2.2,
+    ),
+    jitter=12,
+    seed=11,
+)
+
+UI_INV_SLOT = ui_sdf_fill(
+    radius=4,
+    fill_top=(48, 44, 40, 255),
+    fill_bottom=(28, 25, 22, 255),
+    border=(95, 84, 68, 200),
+    border_width=1.2,
+)
+
+UI_INV_BTN = ui_sdf_fill(
+    radius=6,
+    fill_top=(139, 115, 85, 255),
+    fill_bottom=(107, 87, 64, 255),
+    border=(61, 47, 31, 200),
+    border_width=1.0,
+)
+
+UI_INV_BTN_H = ui_sdf_fill(
+    radius=6,
+    fill_top=(168, 140, 104, 255),
+    fill_bottom=(124, 102, 74, 255),
+    border=(61, 47, 31, 220),
+    border_width=1.0,
+)
+
+UI_INV_BAR = ui_sdf_fill(
+    radius=3,
+    fill_top=(201, 149, 43, 255),
+    fill_bottom=(160, 110, 28, 255),
+    border=(120, 86, 20, 180),
+    border_width=0.6,
+)
+
 
 UI_TEXTURES: dict[str, tuple[int, int, PixelFn]] = {
-    "aracdia_ui_panel.png": (48, 48, UI_PANEL),
-    "aracdia_ui_header.png": (64, 10, UI_HEADER),
-    "aracdia_ui_divider.png": (32, 4, UI_DIVIDER),
-    "aracdia_ui_btn_primary.png": (32, 32, UI_BTN_PRIMARY),
-    "aracdia_ui_btn_primary_h.png": (32, 32, UI_BTN_PRIMARY_H),
-    "aracdia_ui_btn_primary_p.png": (32, 32, UI_BTN_PRIMARY_P),
-    "aracdia_ui_btn_secondary.png": (32, 32, UI_BTN_SECONDARY),
-    "aracdia_ui_btn_secondary_h.png": (32, 32, UI_BTN_SECONDARY_H),
-    "aracdia_ui_btn_success.png": (32, 32, UI_BTN_SUCCESS),
-    "aracdia_ui_btn_success_h.png": (32, 32, UI_BTN_SUCCESS_H),
-    "aracdia_ui_btn_danger.png": (32, 32, UI_BTN_DANGER),
-    "aracdia_ui_btn_danger_h.png": (32, 32, UI_BTN_DANGER_H),
-    "aracdia_ui_btn_disabled.png": (32, 32, UI_BTN_DISABLED),
+    "aracdia_ui_shell.png": (128, 128, UI_SHELL),
+    "aracdia_ui_logo.png": (64, 64, ui_logo_mark()),
+    "aracdia_ui_slot.png": (64, 64, UI_SLOT),
+    "aracdia_ui_btn_primary.png": (128, 48, UI_BTN_PRIMARY),
+    "aracdia_ui_btn_primary_h.png": (128, 48, UI_BTN_PRIMARY_H),
+    "aracdia_ui_btn_primary_p.png": (128, 48, UI_BTN_PRIMARY_P),
+    "aracdia_ui_btn_ghost.png": (128, 48, UI_BTN_GHOST),
+    "aracdia_ui_btn_ghost_h.png": (128, 48, UI_BTN_GHOST_H),
+    "aracdia_ui_btn_active.png": (128, 48, UI_BTN_ACTIVE),
+    "aracdia_ui_btn_active_h.png": (128, 48, UI_BTN_ACTIVE_H),
+    "aracdia_ui_btn_disabled.png": (128, 48, UI_BTN_DISABLED),
+    "aracdia_ui_pill_on.png": (48, 20, ui_pill(True)),
+    "aracdia_ui_pill_off.png": (48, 20, ui_pill(False)),
 }
 
 

@@ -9,5 +9,6 @@ local modpath = core.get_modpath(core.get_current_modname())
 dofile(modpath .. "/nodes.lua")
 dofile(modpath .. "/aliases.lua")
 dofile(modpath .. "/biomes.lua")
+dofile(modpath .. "/environment.lua")
 
 core.log("action", "[aracdia_core] initialised")

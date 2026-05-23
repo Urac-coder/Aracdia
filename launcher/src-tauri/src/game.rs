@@ -50,7 +50,17 @@ pub struct DeployedGame {
 fn resolve_source(app: &AppHandle) -> Result<PathBuf, GameError> {
     let mut tried = Vec::new();
 
-    // 1) Bundled Tauri resource (production)
+    // Dev builds read `game/` straight from the repo so Lua/texture edits
+    // show up on the next launch without rebuilding the Tauri bundle.
+    #[cfg(debug_assertions)]
+    if let Some(candidate) = repo_game_dir() {
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+        tried.push(candidate.display().to_string());
+    }
+
+    // Production (and dev fallback): bundled Tauri resource.
     if let Ok(resource_dir) = app.path().resource_dir() {
         let candidate = resource_dir.join("game");
         if candidate.is_dir() {
@@ -59,20 +69,27 @@ fn resolve_source(app: &AppHandle) -> Result<PathBuf, GameError> {
         tried.push(candidate.display().to_string());
     }
 
-    // 2) Repo source layout (only set in debug builds)
+    // Last-resort repo lookup for debug builds when the bundle is missing.
     #[cfg(debug_assertions)]
-    {
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        if let Some(repo_root) = manifest.parent().and_then(|p| p.parent()) {
-            let candidate = repo_root.join("game");
-            if candidate.is_dir() {
-                return Ok(candidate);
-            }
+    if let Some(candidate) = repo_game_dir() {
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+        if !tried.iter().any(|t| t == &candidate.display().to_string()) {
             tried.push(candidate.display().to_string());
         }
     }
 
     Err(GameError::SourceNotFound(tried.join(", ")))
+}
+
+#[cfg(debug_assertions)]
+fn repo_game_dir() -> Option<PathBuf> {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|repo_root| repo_root.join("game"))
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +215,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
 ///   `crate::content::CONTENT_MARKER_FILE`). In that case the downloaded
 ///   tree is authoritative and the bundle is only a fallback for first runs
 ///   without internet.
+///
+/// Debug builds (`tauri dev`) always deploy from the local `game/` tree so
+/// content edits are visible without publishing a GitHub release.
 pub fn deploy_game(app: &AppHandle) -> Result<DeployedGame, GameError> {
     let source = resolve_source(app)?;
     let gameid = read_gameid(&source)?;
@@ -207,9 +227,10 @@ pub fn deploy_game(app: &AppHandle) -> Result<DeployedGame, GameError> {
 
     let dest = games_root.join(&gameid);
 
-    // If a content download already populated the destination, leave it
-    // alone — the downloaded version is authoritative.
-    if dest.join(crate::content::CONTENT_MARKER_FILE).exists() {
+    // Downloaded releases win in production; dev builds override them so
+    // iterating on `game/mods/` does not require wiping App Support by hand.
+    let content_downloaded = dest.join(crate::content::CONTENT_MARKER_FILE).exists();
+    if content_downloaded && !cfg!(debug_assertions) {
         return Ok(DeployedGame {
             gameid,
             source_dir: source,
