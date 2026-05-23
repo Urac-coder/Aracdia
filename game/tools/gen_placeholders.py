@@ -40,11 +40,16 @@ def _png_chunk(tag: bytes, data: bytes) -> bytes:
 
 def write_png(path: Path, size: int, pixels: PixelFn) -> None:
     """Write a `size`x`size` RGBA PNG. `pixels(x, y, w, h)` returns (r,g,b,a)."""
+    write_png_rect(path, size, size, pixels)
+
+
+def write_png_rect(path: Path, width: int, height: int, pixels: PixelFn) -> None:
+    """Write a `width`x`height` RGBA PNG. `pixels(x, y, w, h)` returns (r,g,b,a)."""
     sig = b"\x89PNG\r\n\x1a\n"
     ihdr = struct.pack(
         ">IIBBBBB",
-        size,
-        size,
+        width,
+        height,
         8,  # bit depth
         6,  # colour type: RGBA
         0,
@@ -52,10 +57,10 @@ def write_png(path: Path, size: int, pixels: PixelFn) -> None:
         0,
     )
     raw = bytearray()
-    for y in range(size):
+    for y in range(height):
         raw.append(0)  # filter type: None
-        for x in range(size):
-            r, g, b, a = pixels(x, y, size, size)
+        for x in range(width):
+            r, g, b, a = pixels(x, y, width, height)
             raw.extend((r & 0xFF, g & 0xFF, b & 0xFF, a & 0xFF))
     idat = zlib.compress(bytes(raw), level=9)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +182,193 @@ TEXTURES: dict[str, PixelFn] = {
 
 
 # ---------------------------------------------------------------------------
+# In-game UI textures (aracdia_menu mod) — launcher-aligned indigo palette
+# ---------------------------------------------------------------------------
+
+def _inside_rounded_rect(x: int, y: int, w: int, h: int, radius: int) -> bool:
+    if x < 0 or y < 0 or x >= w or y >= h:
+        return False
+    r = min(radius, w // 2, h // 2)
+    if r <= 0:
+        return True
+    if r <= x < w - r and r <= y < h - r:
+        return True
+    if x < r and r <= y < h - r:
+        return True
+    if w - r <= x and r <= y < h - r:
+        return True
+    if r <= x < w - r and y < r:
+        return True
+    if r <= x < w - r and y >= h - r:
+        return True
+    for cx, cy in ((r, r), (w - r - 1, r), (r, h - r - 1), (w - r - 1, h - r - 1)):
+        if (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
+            return True
+    return False
+
+
+def _edge_distance(x: int, y: int, w: int, h: int, radius: int) -> int:
+    """Chebyshev-ish distance to the rounded-rect border (0 = on edge)."""
+    if not _inside_rounded_rect(x, y, w, h, radius):
+        return -1
+    r = min(radius, w // 2, h // 2)
+    return min(x, y, w - 1 - x, h - 1 - y)
+
+
+def _lerp(a: int, b: int, t: float) -> int:
+    return int(a * (1 - t) + b * t)
+
+
+def _lerp_rgba(a: RGBA, b: RGBA, t: float) -> RGBA:
+    return tuple(_lerp(a[i], b[i], t) for i in range(4))  # type: ignore[return-value]
+
+
+def ui_rounded(
+    fill: RGBA,
+    *,
+    radius: int = 6,
+    border: RGBA | None = None,
+    border_px: int = 1,
+    top_tint: RGBA | None = None,
+    bottom_tint: RGBA | None = None,
+    jitter: int = 0,
+    seed: int = 0,
+) -> PixelFn:
+    """Rounded rectangle for 9-slice UI panels and buttons."""
+
+    def fn(x: int, y: int, w: int, h: int) -> RGBA:
+        if not _inside_rounded_rect(x, y, w, h, radius):
+            return (0, 0, 0, 0)
+        t = y / max(1, h - 1)
+        base = fill
+        if top_tint and bottom_tint:
+            base = _lerp_rgba(top_tint, bottom_tint, t)
+        elif top_tint and t < 0.45:
+            base = _lerp_rgba(top_tint, fill, t / 0.45)
+        if jitter:
+            n = ((x * 92837111) ^ (y * 689287499) ^ (seed * 283923481)) & 0xFFFF
+            bias = int(((n / 0xFFFF) * 2 - 1) * jitter)
+            base = (
+                max(0, min(255, base[0] + bias)),
+                max(0, min(255, base[1] + bias)),
+                max(0, min(255, base[2] + bias)),
+                base[3],
+            )
+        if border and border_px > 0:
+            dist = _edge_distance(x, y, w, h, radius)
+            if 0 <= dist < border_px:
+                mix = 1 - (dist / max(1, border_px))
+                return _lerp_rgba(base, border, mix)
+        return base
+
+    return fn
+
+
+# Launcher tokens: bg-surface #12121a, accent #6366f1, success #10b981, danger #ef4444
+UI_PANEL = ui_rounded(
+    (18, 18, 26, 255),
+    radius=8,
+    border=(99, 102, 241, 90),
+    border_px=2,
+    jitter=6,
+    seed=40,
+)
+UI_HEADER = lambda x, y, w, h: (  # noqa: E731
+    (99, 102, 241, 220)
+    if y < h // 2
+    else (79, 70, 229, 180)
+    if _inside_rounded_rect(x, y, w, h, 3)
+    else (0, 0, 0, 0)
+)
+UI_DIVIDER = lambda x, y, w, h: (42, 42, 56, 255) if y == h // 2 else (0, 0, 0, 0)  # noqa: E731
+
+UI_BTN_PRIMARY = ui_rounded(
+    (99, 102, 241, 255),
+    radius=5,
+    top_tint=(129, 140, 248, 255),
+    bottom_tint=(79, 70, 229, 255),
+)
+UI_BTN_PRIMARY_H = ui_rounded(
+    (129, 140, 248, 255),
+    radius=5,
+    top_tint=(165, 180, 252, 255),
+    bottom_tint=(99, 102, 241, 255),
+)
+UI_BTN_PRIMARY_P = ui_rounded(
+    (67, 56, 202, 255),
+    radius=5,
+    top_tint=(79, 70, 229, 255),
+    bottom_tint=(55, 48, 163, 255),
+)
+
+UI_BTN_SECONDARY = ui_rounded(
+    (26, 26, 37, 255),
+    radius=5,
+    border=(42, 42, 56, 255),
+    border_px=1,
+    jitter=4,
+    seed=41,
+)
+UI_BTN_SECONDARY_H = ui_rounded(
+    (34, 34, 46, 255),
+    radius=5,
+    border=(99, 102, 241, 120),
+    border_px=1,
+)
+
+UI_BTN_SUCCESS = ui_rounded(
+    (16, 46, 36, 255),
+    radius=5,
+    border=(16, 185, 129, 180),
+    border_px=1,
+    top_tint=(22, 78, 58, 255),
+    bottom_tint=(12, 36, 28, 255),
+)
+UI_BTN_SUCCESS_H = ui_rounded(
+    (20, 58, 44, 255),
+    radius=5,
+    border=(52, 211, 153, 200),
+    border_px=1,
+)
+
+UI_BTN_DANGER = ui_rounded(
+    (36, 18, 22, 255),
+    radius=5,
+    border=(239, 68, 68, 140),
+    border_px=1,
+)
+UI_BTN_DANGER_H = ui_rounded(
+    (52, 22, 28, 255),
+    radius=5,
+    border=(248, 113, 113, 180),
+    border_px=1,
+)
+
+UI_BTN_DISABLED = ui_rounded(
+    (16, 16, 22, 255),
+    radius=5,
+    border=(34, 34, 44, 255),
+    border_px=1,
+)
+
+UI_TEXTURES: dict[str, tuple[int, int, PixelFn]] = {
+    "aracdia_ui_panel.png": (48, 48, UI_PANEL),
+    "aracdia_ui_header.png": (64, 10, UI_HEADER),
+    "aracdia_ui_divider.png": (32, 4, UI_DIVIDER),
+    "aracdia_ui_btn_primary.png": (32, 32, UI_BTN_PRIMARY),
+    "aracdia_ui_btn_primary_h.png": (32, 32, UI_BTN_PRIMARY_H),
+    "aracdia_ui_btn_primary_p.png": (32, 32, UI_BTN_PRIMARY_P),
+    "aracdia_ui_btn_secondary.png": (32, 32, UI_BTN_SECONDARY),
+    "aracdia_ui_btn_secondary_h.png": (32, 32, UI_BTN_SECONDARY_H),
+    "aracdia_ui_btn_success.png": (32, 32, UI_BTN_SUCCESS),
+    "aracdia_ui_btn_success_h.png": (32, 32, UI_BTN_SUCCESS_H),
+    "aracdia_ui_btn_danger.png": (32, 32, UI_BTN_DANGER),
+    "aracdia_ui_btn_danger_h.png": (32, 32, UI_BTN_DANGER_H),
+    "aracdia_ui_btn_disabled.png": (32, 32, UI_BTN_DISABLED),
+}
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -206,7 +398,12 @@ def main() -> int:
     )
     print(f"  menu:    {menu_dir / 'background.png'}")
 
-    print(f"Done. Wrote {len(TEXTURES) + 3} placeholder PNGs.")
+    ui_dir = game_root / "mods" / "aracdia_menu" / "textures"
+    for name, (width, height, fn) in UI_TEXTURES.items():
+        write_png_rect(ui_dir / name, width, height, fn)
+        print(f"  ui:      {ui_dir / name}")
+
+    print(f"Done. Wrote {len(TEXTURES) + 3 + len(UI_TEXTURES)} placeholder PNGs.")
     return 0
 
 
