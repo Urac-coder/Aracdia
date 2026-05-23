@@ -19,7 +19,7 @@ export const SETTINGS_RULES = {
 } as const;
 
 export const DEFAULT_MANIFEST_URL =
-  "https://api.github.com/repos/aracdia/aracdia-engine/releases/latest";
+  "https://api.github.com/repos/Urac-coder/aracdia-engine/releases/latest";
 
 export const DEFAULT_SETTINGS: LauncherSettings = {
   memoryMb: 2048,

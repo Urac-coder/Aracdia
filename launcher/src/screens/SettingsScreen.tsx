@@ -208,7 +208,7 @@ export function SettingsScreen({ onBack }: SettingsScreenProps) {
               error={errors.manifestUrl}
             >
               <Input
-                placeholder="https://api.github.com/repos/aracdia/aracdia-engine/releases/latest"
+                placeholder="https://api.github.com/repos/Urac-coder/aracdia-engine/releases/latest"
                 value={settings.manifestUrl}
                 invalid={!!errors.manifestUrl}
                 onChange={(e) => update("manifestUrl", e.currentTarget.value)}

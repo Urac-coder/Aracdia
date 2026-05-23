@@ -25,10 +25,10 @@ const DEFAULT_SERVER_ADDRESS: &str = "";
 const DEFAULT_SERVER_PORT: u16 = 30_000;
 const DEFAULT_AUTO_CONNECT: bool = false;
 /// Default manifest URL: the GitHub Releases API "latest" endpoint of the
-/// (yet-to-be-created) `aracdia-engine` repo. Configurable so users/devs can
-/// point the launcher at a custom manifest while the fork is being set up.
+/// `aracdia-engine` repo. Configurable so users/devs can point the launcher
+/// at a custom fork while iterating on engine builds.
 const DEFAULT_MANIFEST_URL: &str =
-    "https://api.github.com/repos/aracdia/aracdia-engine/releases/latest";
+    "https://api.github.com/repos/Urac-coder/aracdia-engine/releases/latest";
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

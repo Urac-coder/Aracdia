@@ -32,7 +32,7 @@ Supported `<target>` values (must match Rust target triples):
 The launcher resolves manifests via the GitHub Releases API:
 
 ```
-https://api.github.com/repos/aracdia/aracdia-engine/releases/latest
+https://api.github.com/repos/Urac-coder/aracdia-engine/releases/latest
 ```
 
 So **the assets must be attached to a published release** (not just stored as
@@ -40,14 +40,15 @@ raw files in the repo).
 
 ## Step 1 — Create the repo
 
-1. Create an empty repo `aracdia/aracdia-engine` on GitHub (any visibility,
-   public is fine).
-2. Locally:
+1. Create an empty repo `<your-user>/aracdia-engine` on GitHub (any visibility,
+   public is fine). The launcher's default points at `Urac-coder/aracdia-engine`
+   — change `manifest_url` in Paramètres if your repo lives elsewhere.
+2. Locally (do **not** use `--depth 1`, the initial push needs the full history):
    ```bash
-   git clone --depth 1 https://github.com/luanti-org/luanti.git aracdia-engine
+   git clone https://github.com/luanti-org/luanti.git aracdia-engine
    cd aracdia-engine
    git remote remove origin
-   git remote add origin git@github.com:aracdia/aracdia-engine.git
+   git remote add origin https://github.com/<your-user>/aracdia-engine.git
    git checkout -b main
    git push -u origin main
    ```
