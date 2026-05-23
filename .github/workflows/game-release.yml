@@ -1,0 +1,75 @@
+name: Game release
+
+on:
+  push:
+    tags:
+      - 'game-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name to release (must start with game-v, e.g. game-v0.1.0)'
+        required: true
+        default: 'game-v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # We package the tag's snapshot of game/, not the workflow file
+          # checkout — explicitly point to the tag so workflow_dispatch and
+          # tag-push behave the same.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve tag and version
+        id: meta
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ "$tag" != game-v* ]]; then
+            echo "::error::Tag '$tag' does not start with 'game-v'. Aborting."
+            exit 1
+          fi
+          version="${tag#game-v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (game version $version)"
+
+      - name: Sanity check that game/ exists
+        run: |
+          test -d game
+          test -f game/game.conf
+          ls game/mods/aracdia_core/
+
+      - name: Stamp version into the bundle
+        run: |
+          mkdir -p game
+          # Drop a small VERSION file inside the zip so the engine and the
+          # launcher can both report the deployed game version.
+          printf '%s\n' '${{ steps.meta.outputs.version }}' > game/VERSION
+
+      - name: Package game/ as a flat zip
+        run: |
+          # Zip from inside game/ so the archive's top-level entries are
+          # `game.conf`, `mods/`, `menu/`, … (no `game/` wrapper). The
+          # launcher extracts straight into `<luanti_user>/games/<id>/`.
+          (cd game && zip -r "$GITHUB_WORKSPACE/aracdia-game.zip" . -x '*.DS_Store')
+          sha256sum aracdia-game.zip | tee aracdia-game.zip.sha256
+          ls -la aracdia-game.zip aracdia-game.zip.sha256
+          echo '--- top-level entries ---'
+          unzip -l aracdia-game.zip | head -25
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Aracdia Game ${{ steps.meta.outputs.version }}
+          generate_release_notes: true
+          files: |
+            aracdia-game.zip
+            aracdia-game.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

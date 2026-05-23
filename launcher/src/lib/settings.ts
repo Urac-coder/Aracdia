@@ -7,6 +7,7 @@ export interface LauncherSettings {
   autoConnect: boolean;
   installDir: string | null;
   manifestUrl: string;
+  contentManifestUrl: string;
 }
 
 /** Mirror of Rust-side limits — keep in sync with `settings.rs`. */
@@ -21,6 +22,9 @@ export const SETTINGS_RULES = {
 export const DEFAULT_MANIFEST_URL =
   "https://api.github.com/repos/Urac-coder/aracdia-engine/releases/latest";
 
+export const DEFAULT_CONTENT_MANIFEST_URL =
+  "https://api.github.com/repos/Urac-coder/Aracdia/releases?per_page=30";
+
 export const DEFAULT_SETTINGS: LauncherSettings = {
   memoryMb: 2048,
   serverAddress: "",
@@ -28,6 +32,7 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
   autoConnect: false,
   installDir: null,
   manifestUrl: DEFAULT_MANIFEST_URL,
+  contentManifestUrl: DEFAULT_CONTENT_MANIFEST_URL,
 };
 
 export async function loadSettings(): Promise<LauncherSettings> {
@@ -49,6 +54,7 @@ export interface SettingsValidationErrors {
   serverAddress?: string;
   serverPort?: string;
   manifestUrl?: string;
+  contentManifestUrl?: string;
 }
 
 export function validateSettings(
@@ -87,6 +93,13 @@ export function validateSettings(
     errors.manifestUrl = "URL requise.";
   } else if (!/^https?:\/\//i.test(manifestUrl)) {
     errors.manifestUrl = "Doit commencer par http(s)://";
+  }
+
+  const contentManifestUrl = settings.contentManifestUrl.trim();
+  if (contentManifestUrl.length === 0) {
+    errors.contentManifestUrl = "URL requise.";
+  } else if (!/^https?:\/\//i.test(contentManifestUrl)) {
+    errors.contentManifestUrl = "Doit commencer par http(s)://";
   }
 
   return errors;

@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
+  CloudDownload,
   Download,
   Gamepad2,
   LogOut,
   Newspaper,
+  Package,
   Play,
+  RefreshCw,
   Settings,
   Square,
   XCircle,
@@ -24,6 +27,15 @@ import {
   type EngineStatus,
   type InstallProgress,
 } from "@/lib/engine";
+import {
+  fetchContentRelease,
+  getContentStatus,
+  installContent,
+  listenToContentInstall,
+  type ContentRelease,
+  type ContentStatus,
+  type InstallProgress as ContentInstallProgress,
+} from "@/lib/content";
 import {
   currentSession,
   launchEngine,
@@ -238,8 +250,211 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
               onRetry={() => setFlow({ kind: "idle" })}
             />
           </Card>
+
+          <ContentCard />
         </aside>
       </main>
+    </div>
+  );
+}
+
+type ContentFlow =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "installing"; progress: ContentInstallProgress | null; release: ContentRelease }
+  | { kind: "uptoDate"; version: string }
+  | { kind: "available"; release: ContentRelease }
+  | { kind: "error"; message: string };
+
+function ContentCard() {
+  const [status, setStatus] = useState<ContentStatus | null>(null);
+  const [flow, setFlow] = useState<ContentFlow>({ kind: "idle" });
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await getContentStatus();
+        if (!cancelled) setStatus(s);
+      } catch (err) {
+        console.error("Failed to read content status", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listenToContentInstall({
+      onProgress: (progress) => {
+        setFlow((current) =>
+          current.kind === "installing" ? { ...current, progress } : current,
+        );
+      },
+      onComplete: ({ version }) => {
+        setStatus({ kind: "installed", version, path: "" });
+        setFlow({ kind: "uptoDate", version });
+        inFlight.current = false;
+      },
+      onError: ({ message }) => {
+        setFlow({ kind: "error", message });
+        inFlight.current = false;
+      },
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  async function handleCheck() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setFlow({ kind: "checking" });
+    try {
+      const release = await fetchContentRelease();
+      const installedVersion = status?.kind === "installed" ? status.version : null;
+      if (installedVersion === release.version) {
+        setFlow({ kind: "uptoDate", version: release.version });
+        inFlight.current = false;
+      } else {
+        setFlow({ kind: "available", release });
+        inFlight.current = false;
+      }
+    } catch (err) {
+      setFlow({
+        kind: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      inFlight.current = false;
+    }
+  }
+
+  async function handleInstall(release: ContentRelease) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setFlow({ kind: "installing", progress: null, release });
+    try {
+      await installContent(release);
+      // Completion handled by the event listener above.
+    } catch (err) {
+      setFlow({
+        kind: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      inFlight.current = false;
+    }
+  }
+
+  const isInstalled = status?.kind === "installed";
+
+  return (
+    <Card className="p-5">
+      <div className="mb-3 flex items-center gap-2 text-[var(--color-text-secondary)]">
+        <Package className="h-4 w-4" />
+        <h2 className="text-xs font-medium uppercase tracking-wider">Contenu</h2>
+      </div>
+
+      {flow.kind === "checking" && (
+        <p className="text-sm text-[var(--color-text-secondary)]">Recherche d'une mise à jour…</p>
+      )}
+
+      {flow.kind === "installing" && (
+        <ContentInstallProgressView flow={flow} />
+      )}
+
+      {flow.kind === "uptoDate" && (
+        <div className="flex items-center gap-2 text-sm">
+          <CheckCircle2 className="h-3.5 w-3.5 text-[var(--color-success-500)]" />
+          <span className="text-[var(--color-text-secondary)]">
+            Contenu à jour · v{flow.version}
+          </span>
+        </div>
+      )}
+
+      {flow.kind === "available" && (
+        <div className="flex flex-col gap-3">
+          <div className="text-sm">
+            <span className="text-[var(--color-text-secondary)]">Mise à jour disponible : </span>
+            <span className="font-display font-semibold">v{flow.release.version}</span>
+            <span className="ml-1 text-[var(--color-text-muted)]">
+              ({formatBytes(flow.release.asset.sizeBytes)})
+            </span>
+          </div>
+          <Button size="sm" onClick={() => handleInstall(flow.release)}>
+            <CloudDownload className="h-4 w-4" />
+            Télécharger et installer
+          </Button>
+        </div>
+      )}
+
+      {flow.kind === "error" && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-[var(--color-danger-500)]">{flow.message}</p>
+          <Button size="sm" variant="secondary" onClick={() => setFlow({ kind: "idle" })}>
+            Fermer
+          </Button>
+        </div>
+      )}
+
+      {flow.kind === "idle" && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 text-sm">
+            {isInstalled ? (
+              <>
+                <CheckCircle2 className="h-3.5 w-3.5 text-[var(--color-success-500)]" />
+                <span className="text-[var(--color-text-secondary)]">
+                  Contenu installé · v{status!.version}
+                </span>
+              </>
+            ) : (
+              <>
+                <Package className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
+                <span className="text-[var(--color-text-secondary)]">Contenu intégré au launcher</span>
+              </>
+            )}
+          </div>
+          <Button size="sm" variant="secondary" onClick={handleCheck}>
+            <RefreshCw className="h-4 w-4" />
+            Vérifier les mises à jour
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ContentInstallProgressView({
+  flow,
+}: {
+  flow: { progress: ContentInstallProgress | null; release: ContentRelease };
+}) {
+  const progress = flow.progress;
+  const phase = progress ? describePhase(progress.phase) : "Préparation";
+  const total = progress?.bytesTotal ?? flow.release.asset.sizeBytes;
+  const done = progress?.bytesDone ?? 0;
+  const ratio = total > 0 ? Math.min(1, done / total) : 0;
+
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-display font-semibold">
+          {phase} · v{flow.release.version}
+        </span>
+        <span className="text-xs text-[var(--color-text-muted)]">
+          {formatBytes(done)} / {formatBytes(total)}
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-bg-overlay)]">
+        <div
+          className="h-full rounded-full bg-[var(--color-accent-500)] transition-[width] duration-200"
+          style={{ width: `${(ratio * 100).toFixed(1)}%` }}
+        />
+      </div>
     </div>
   );
 }

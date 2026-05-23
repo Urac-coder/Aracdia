@@ -192,7 +192,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
 // ---------------------------------------------------------------------------
 
 /// Copies the bundled `game/` to Luanti's `<user>/games/<gameid>/`. Skips the
-/// copy when the destination already matches the source signature.
+/// copy when:
+/// - the destination already matches the source signature, or
+/// - the destination was populated by a content download (presence of
+///   `crate::content::CONTENT_MARKER_FILE`). In that case the downloaded
+///   tree is authoritative and the bundle is only a fallback for first runs
+///   without internet.
 pub fn deploy_game(app: &AppHandle) -> Result<DeployedGame, GameError> {
     let source = resolve_source(app)?;
     let gameid = read_gameid(&source)?;
@@ -201,6 +206,17 @@ pub fn deploy_game(app: &AppHandle) -> Result<DeployedGame, GameError> {
     std::fs::create_dir_all(&games_root)?;
 
     let dest = games_root.join(&gameid);
+
+    // If a content download already populated the destination, leave it
+    // alone — the downloaded version is authoritative.
+    if dest.join(crate::content::CONTENT_MARKER_FILE).exists() {
+        return Ok(DeployedGame {
+            gameid,
+            source_dir: source,
+            deployed_dir: dest,
+        });
+    }
+
     let marker = dest.join(MARKER_FILE);
     let sig = signature_of_tree(&source)?;
 
@@ -290,9 +306,16 @@ mod tests {
     }
 
     fn tempdir() -> PathBuf {
+        // Combine a process id, a timestamp and a per-call counter so two
+        // parallel test threads cannot accidentally land in the same dir.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let mut p = std::env::temp_dir();
         let n = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-        p.push(format!("aracdia_test_{n}"));
+        let pid = std::process::id();
+        let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+        p.push(format!("aracdia_test_{pid}_{n}_{c}"));
         std::fs::create_dir_all(&p).unwrap();
         p
     }

@@ -29,6 +29,12 @@ const DEFAULT_AUTO_CONNECT: bool = false;
 /// at a custom fork while iterating on engine builds.
 const DEFAULT_MANIFEST_URL: &str =
     "https://api.github.com/repos/Urac-coder/aracdia-engine/releases/latest";
+/// Default content manifest URL: the GitHub Releases API endpoint that lists
+/// recent releases of the Aracdia monorepo. The launcher filters those
+/// releases by tag prefix `game-v` and picks the newest. Configurable so
+/// devs can point at a fork while iterating on game content.
+const DEFAULT_CONTENT_MANIFEST_URL: &str =
+    "https://api.github.com/repos/Urac-coder/Aracdia/releases?per_page=30";
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -49,10 +55,18 @@ pub struct LauncherSettings {
     /// overriding the default `aracdia-engine` repo for testing.
     #[serde(default = "default_manifest_url")]
     pub manifest_url: String,
+    /// URL where the launcher fetches the *content* (game) release manifest.
+    /// Releases under this endpoint are filtered by tag prefix `game-v`.
+    #[serde(default = "default_content_manifest_url")]
+    pub content_manifest_url: String,
 }
 
 fn default_manifest_url() -> String {
     DEFAULT_MANIFEST_URL.to_owned()
+}
+
+fn default_content_manifest_url() -> String {
+    DEFAULT_CONTENT_MANIFEST_URL.to_owned()
 }
 
 impl Default for LauncherSettings {
@@ -64,6 +78,7 @@ impl Default for LauncherSettings {
             auto_connect: DEFAULT_AUTO_CONNECT,
             install_dir: None,
             manifest_url: default_manifest_url(),
+            content_manifest_url: default_content_manifest_url(),
         }
     }
 }
@@ -114,6 +129,14 @@ fn validate(settings: &LauncherSettings) -> Result<(), SettingsError> {
         || settings.manifest_url.starts_with("http://"))
     {
         return Err(SettingsError::Invalid("manifest_url must be http(s)"));
+    }
+    if settings.content_manifest_url.trim().is_empty() {
+        return Err(SettingsError::Invalid("content_manifest_url is empty"));
+    }
+    if !(settings.content_manifest_url.starts_with("https://")
+        || settings.content_manifest_url.starts_with("http://"))
+    {
+        return Err(SettingsError::Invalid("content_manifest_url must be http(s)"));
     }
     Ok(())
 }

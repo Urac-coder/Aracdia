@@ -1,5 +1,6 @@
 //! Aracdia Launcher — Tauri 2 entry point.
 
+mod content;
 mod download;
 mod engine;
 mod game;
@@ -13,6 +14,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(engine::EngineLock::default())
+        .manage(content::ContentLock::default())
         .manage(launch::LaunchState::default())
         .invoke_handler(tauri::generate_handler![
             profile::load_profile,
@@ -26,6 +28,9 @@ pub fn run() {
             engine::fetch_engine_release,
             engine::install_engine,
             engine::uninstall_engine,
+            content::content_status,
+            content::fetch_content_release,
+            content::install_content,
             launch::launch_engine,
             launch::stop_engine,
             launch::is_engine_running,
