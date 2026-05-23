@@ -21,6 +21,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use crate::game;
 use crate::paths;
 use crate::profile::{self};
 use crate::settings::{self, LauncherSettings};
@@ -46,6 +47,8 @@ pub enum LaunchError {
     Settings(String),
     #[error("profile error: {0}")]
     Profile(String),
+    #[error("game deploy error: {0}")]
+    Game(String),
 }
 
 impl From<LaunchError> for String {
@@ -194,8 +197,12 @@ pub fn strip_quarantine(path: &Path) {
 // Argument building
 // ---------------------------------------------------------------------------
 
-fn build_args(settings: &LauncherSettings, username: &str) -> Vec<String> {
+fn build_args(settings: &LauncherSettings, username: &str, gameid: &str) -> Vec<String> {
     let mut args = vec![
+        // Force the engine into our game so the user never sees the bare
+        // Luanti menu.
+        "--gameid".to_owned(),
+        gameid.to_owned(),
         // Username forwarded to the engine for both menu prefill and direct connect
         "--name".to_owned(),
         username.to_owned(),
@@ -380,7 +387,17 @@ pub async fn launch_engine(
         Some(p) => p.username,
         None => "Player".to_owned(),
     };
-    let args = build_args(&settings, &username);
+
+    // Make sure the bundled Aracdia game is materialised next to the engine
+    // before we spawn — Luanti looks up `--gameid <id>` in well-known dirs.
+    let deployed = game::deploy_game(&app).map_err(|e| LaunchError::Game(e.to_string()))?;
+    eprintln!(
+        "[launch] game `{}` deployed: {} -> {}",
+        deployed.gameid,
+        deployed.source_dir.display(),
+        deployed.deployed_dir.display(),
+    );
+    let args = build_args(&settings, &username, &deployed.gameid);
 
     let cwd = engine_dir.clone();
 
@@ -529,9 +546,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_args_includes_name() {
+    fn build_args_includes_gameid_and_name() {
         let s = LauncherSettings::default();
-        let args = build_args(&s, "Aragorn");
+        let args = build_args(&s, "Aragorn", "aracdia");
+        assert!(args.windows(2).any(|w| w == ["--gameid", "aracdia"]));
         assert!(args.windows(2).any(|w| w == ["--name", "Aragorn"]));
         assert!(!args.iter().any(|a| a == "--address"));
     }
@@ -542,7 +560,7 @@ mod tests {
         s.server_address = "play.example.com".to_owned();
         s.server_port = 30000;
         s.auto_connect = true;
-        let args = build_args(&s, "U");
+        let args = build_args(&s, "U", "aracdia");
         assert!(args.iter().any(|a| a == "--go"));
         assert!(args.windows(2).any(|w| w == ["--address", "play.example.com"]));
         assert!(args.windows(2).any(|w| w == ["--port", "30000"]));
@@ -553,7 +571,7 @@ mod tests {
         let mut s = LauncherSettings::default();
         s.server_address = "play.example.com".to_owned();
         s.auto_connect = false;
-        let args = build_args(&s, "U");
+        let args = build_args(&s, "U", "aracdia");
         assert!(!args.iter().any(|a| a == "--address"));
         assert!(!args.iter().any(|a| a == "--go"));
     }

@@ -41,6 +41,9 @@
     ],
     "category": "Game",
     "shortDescription": "Aracdia game launcher",
-    "longDescription": "Official launcher for the Aracdia game."
+    "longDescription": "Official launcher for the Aracdia game.",
+    "resources": {
+      "../../game": "game"
+    }
   }
 }

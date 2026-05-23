@@ -2,6 +2,7 @@
 
 mod download;
 mod engine;
+mod game;
 mod launch;
 mod paths;
 mod profile;

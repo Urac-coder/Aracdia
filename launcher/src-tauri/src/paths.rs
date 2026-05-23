@@ -72,3 +72,39 @@ pub fn cache_dir() -> Result<PathBuf, std::io::Error> {
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
+
+/// Returns the user-level Luanti directory (the engine reads/writes the
+/// games and worlds tree here). The engine still uses the legacy `minetest`
+/// folder name for backwards compat with existing installs and saves.
+///
+/// - macOS:   `~/Library/Application Support/minetest/`
+/// - Windows: `%APPDATA%\minetest\`
+/// - Linux:   `~/.minetest/`
+pub fn luanti_user_dir() -> Result<PathBuf, std::io::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set")
+        })?;
+        Ok(PathBuf::from(home).join("Library/Application Support/minetest"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA").ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA is not set")
+        })?;
+        Ok(PathBuf::from(appdata).join("minetest"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set")
+        })?;
+        Ok(PathBuf::from(home).join(".minetest"))
+    }
+}
+
+/// Returns the directory where Luanti looks up `--gameid <id>` games.
+pub fn luanti_user_games_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(luanti_user_dir()?.join("games"))
+}
