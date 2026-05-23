@@ -25,10 +25,11 @@ import {
   type InstallProgress,
 } from "@/lib/engine";
 import {
-  isEngineRunning,
+  currentSession,
   launchEngine,
   listenToLaunch,
   stopEngine,
+  type RunningSession,
 } from "@/lib/launch";
 
 interface HomeScreenProps {
@@ -44,7 +45,7 @@ type Flow =
   | { kind: "fetchingManifest" }
   | { kind: "installing"; progress: InstallProgress | null; release: EngineRelease }
   | { kind: "starting" }
-  | { kind: "running"; pid: number; logPath: string }
+  | { kind: "running"; session: RunningSession }
   | { kind: "error"; message: string };
 
 export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProps) {
@@ -52,21 +53,21 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
   const [flow, setFlow] = useState<Flow>({ kind: "idle" });
   const installInFlight = useRef(false);
 
-  // Initial engine status fetch + reconcile a possibly running engine after reload
+  // Initial engine status fetch + reconcile a possibly running engine session
+  // (e.g. WebView reload, or relaunch of the launcher after a crash that left
+  // the engine subprocess alive).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [s, running] = await Promise.all([
+        const [s, session] = await Promise.all([
           getEngineStatus(),
-          isEngineRunning(),
+          currentSession(),
         ]);
         if (cancelled) return;
         setStatus(s);
-        if (running) {
-          // We don't have the original PID/logPath here, but we know a session
-          // is alive — show the running UI with placeholder values.
-          setFlow({ kind: "running", pid: 0, logPath: "" });
+        if (session) {
+          setFlow({ kind: "running", session });
         }
       } catch (err) {
         console.error("Failed to read engine state", err);
@@ -107,8 +108,8 @@ export function HomeScreen({ profile, onLogout, onOpenSettings }: HomeScreenProp
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     listenToLaunch({
-      onStarted: ({ pid, logPath }) => {
-        setFlow({ kind: "running", pid, logPath });
+      onStarted: (session) => {
+        setFlow({ kind: "running", session });
       },
       onExited: ({ exitCode, success }) => {
         setFlow(
@@ -293,13 +294,13 @@ function PlayPanel({ status, flow, onPlay, onStop, onRetry }: PlayPanelProps) {
   }
 
   if (flow.kind === "running") {
+    const { session } = flow;
+    const startedAt = formatStartedAt(session.startedAt);
     return (
       <PanelLayout
         icon={<Gamepad2 className="h-5 w-5 text-[var(--color-success-500)]" />}
         title="Jeu en cours"
-        subtitle={
-          flow.pid > 0 ? `PID ${flow.pid}` : "Session déjà active à l'ouverture du launcher"
-        }
+        subtitle={`PID ${session.pid} · démarré ${startedAt}`}
       >
         <Button variant="danger" className="w-full" onClick={onStop}>
           <Square className="h-4 w-4" />
@@ -393,4 +394,17 @@ function Spinner() {
       <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--color-border-strong)] border-t-[var(--color-accent-500)]" />
     </div>
   );
+}
+
+const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat("fr", { numeric: "auto" });
+
+function formatStartedAt(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "à l'instant";
+  const diffSec = Math.round((t - Date.now()) / 1000);
+  const abs = Math.abs(diffSec);
+  if (abs < 60) return RELATIVE_FORMATTER.format(diffSec, "second");
+  if (abs < 3600) return RELATIVE_FORMATTER.format(Math.round(diffSec / 60), "minute");
+  if (abs < 86_400) return RELATIVE_FORMATTER.format(Math.round(diffSec / 3600), "hour");
+  return RELATIVE_FORMATTER.format(Math.round(diffSec / 86_400), "day");
 }

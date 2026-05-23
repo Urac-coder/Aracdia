@@ -1,9 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export interface LaunchStarted {
+/// Mirrors the Rust `RunningSession` struct (camelCased on the wire).
+export interface RunningSession {
   pid: number;
   logPath: string;
+  startedAt: string; // ISO 8601
+  binary: string;
+  binaryName: string;
 }
 
 export interface LaunchLine {
@@ -22,8 +26,8 @@ export const LAUNCH_EVENTS = {
   exited: "engine://launch:exited",
 } as const;
 
-export async function launchEngine(): Promise<LaunchStarted> {
-  return await invoke<LaunchStarted>("launch_engine");
+export async function launchEngine(): Promise<RunningSession> {
+  return await invoke<RunningSession>("launch_engine");
 }
 
 export async function stopEngine(): Promise<void> {
@@ -34,8 +38,14 @@ export async function isEngineRunning(): Promise<boolean> {
   return await invoke<boolean>("is_engine_running");
 }
 
+/// Returns the live engine session if any (own child OR recovered after a
+/// launcher restart while the engine is still alive).
+export async function currentSession(): Promise<RunningSession | null> {
+  return await invoke<RunningSession | null>("current_session");
+}
+
 export interface LaunchListeners {
-  onStarted?: (event: LaunchStarted) => void;
+  onStarted?: (event: RunningSession) => void;
   onLine?: (event: LaunchLine) => void;
   onExited?: (event: LaunchExited) => void;
 }
@@ -46,7 +56,7 @@ export async function listenToLaunch(
   const handles: UnlistenFn[] = [];
   if (listeners.onStarted) {
     handles.push(
-      await listen<LaunchStarted>(LAUNCH_EVENTS.started, (e) =>
+      await listen<RunningSession>(LAUNCH_EVENTS.started, (e) =>
         listeners.onStarted!(e.payload),
       ),
     );

@@ -28,6 +28,7 @@ pub fn run() {
             launch::launch_engine,
             launch::stop_engine,
             launch::is_engine_running,
+            launch::current_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aracdia launcher");

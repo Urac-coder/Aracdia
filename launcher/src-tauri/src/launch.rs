@@ -2,13 +2,19 @@
 //! directory, launch it as a subprocess with the right arguments, stream its
 //! stdout/stderr into a rolling log file, and emit Tauri events so the UI
 //! can show the "game running" state.
+//!
+//! Sessions are persisted to `<data>/session.json` so that if the launcher
+//! is killed (crash, SIGKILL, …) while the engine is still alive, the next
+//! launcher run can detect the running process and offer "Quitter le jeu"
+//! pointing at the right PID and log file.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
-use chrono::Utc;
-use serde::Serialize;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sysinfo::{Pid, System};
 use tauri::{AppHandle, Emitter, State};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -48,11 +54,19 @@ impl From<LaunchError> for String {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Persisted record of the running engine subprocess. Survives launcher
+/// crashes via the on-disk `session.json` file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaunchStarted {
+pub struct RunningSession {
     pub pid: u32,
-    pub log_path: String,
+    pub log_path: PathBuf,
+    pub started_at: DateTime<Utc>,
+    /// Full path to the engine binary that was spawned. Used as anti-PID-recycling
+    /// check: a recovered session is only trusted if the live process at that PID
+    /// has a matching executable name.
+    pub binary: PathBuf,
+    pub binary_name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,15 +83,36 @@ pub struct LaunchExited {
     pub success: bool,
 }
 
+/// In-memory representation of "what session, if any, is alive right now".
+enum SessionState {
+    None,
+    Owned {
+        child: Child,
+        info: RunningSession,
+    },
+    Recovered {
+        info: RunningSession,
+    },
+}
+
+impl SessionState {
+    fn info(&self) -> Option<&RunningSession> {
+        match self {
+            SessionState::None => None,
+            SessionState::Owned { info, .. } | SessionState::Recovered { info } => Some(info),
+        }
+    }
+}
+
 /// Application state: at most one running engine subprocess.
 pub struct LaunchState {
-    inner: Arc<Mutex<Option<Child>>>,
+    inner: Arc<Mutex<SessionState>>,
 }
 
 impl Default for LaunchState {
     fn default() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(None)),
+            inner: Arc::new(Mutex::new(SessionState::None)),
         }
     }
 }
@@ -193,41 +228,139 @@ fn new_log_file() -> Result<(std::fs::File, PathBuf), std::io::Error> {
 }
 
 // ---------------------------------------------------------------------------
+// Session persistence
+// ---------------------------------------------------------------------------
+
+fn session_file_path() -> Result<PathBuf, std::io::Error> {
+    Ok(paths::data_dir()?.join("session.json"))
+}
+
+fn write_session(info: &RunningSession) -> Result<(), std::io::Error> {
+    let path = session_file_path()?;
+    let json = serde_json::to_string_pretty(info)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    std::fs::write(path, json)
+}
+
+fn clear_session_file() {
+    if let Ok(path) = session_file_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn read_session_file() -> Option<RunningSession> {
+    let path = session_file_path().ok()?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+// ---------------------------------------------------------------------------
+// PID introspection (anti-collision: must match expected binary name)
+// ---------------------------------------------------------------------------
+
+/// Strips an executable suffix and lower-cases the basename so that names like
+/// "luanti", "luanti.exe", "Luanti" all compare equal.
+fn normalize_exec_name(name: &str) -> String {
+    let lower = name.to_lowercase();
+    lower
+        .strip_suffix(".exe")
+        .unwrap_or(&lower)
+        .to_string()
+}
+
+/// Returns true iff a process at `pid` is alive AND its executable basename
+/// matches `expected_name` (case-insensitively, after stripping `.exe`).
+fn pid_alive_with_name(pid: u32, expected_name: &str) -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        true,
+        sysinfo::ProcessRefreshKind::new(),
+    );
+    let Some(p) = sys.process(Pid::from_u32(pid)) else {
+        return false;
+    };
+    let raw = p.name().to_string_lossy().to_string();
+    let actual = normalize_exec_name(&raw);
+    let expected = normalize_exec_name(expected_name);
+    actual == expected
+}
+
+/// Best-effort kill via sysinfo. Returns true on apparent success.
+fn kill_pid(pid: u32) -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        true,
+        sysinfo::ProcessRefreshKind::new(),
+    );
+    sys.process(Pid::from_u32(pid))
+        .map(|p| p.kill())
+        .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Internal session reconciliation
+// ---------------------------------------------------------------------------
+
+/// Inspects the current state and returns the live session if any. Cleans
+/// up after a process that has died since we last looked.
+async fn reconcile_session(state: &LaunchState) -> Option<RunningSession> {
+    let mut guard = state.inner.lock().await;
+    match &mut *guard {
+        SessionState::None => {}
+        SessionState::Owned { child, info } => match child.try_wait() {
+            Ok(None) => return Some(info.clone()),
+            _ => {
+                clear_session_file();
+                *guard = SessionState::None;
+                return None;
+            }
+        },
+        SessionState::Recovered { info } => {
+            if pid_alive_with_name(info.pid, &info.binary_name) {
+                return Some(info.clone());
+            }
+            clear_session_file();
+            *guard = SessionState::None;
+            return None;
+        }
+    }
+
+    // Nothing in memory — try recovering from disk (after a launcher crash).
+    if let Some(info) = read_session_file() {
+        if pid_alive_with_name(info.pid, &info.binary_name) {
+            *guard = SessionState::Recovered { info: info.clone() };
+            return Some(info);
+        }
+        clear_session_file();
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn is_engine_running(state: State<'_, LaunchState>) -> Result<bool, String> {
-    let mut guard = state.inner.lock().await;
-    let still_running = if let Some(child) = guard.as_mut() {
-        match child.try_wait() {
-            Ok(Some(_)) => false, // process exited, will be reaped below
-            Ok(None) => true,
-            Err(_) => false,
-        }
-    } else {
-        false
-    };
-    if !still_running && guard.is_some() {
-        *guard = None;
-    }
-    Ok(still_running)
+    Ok(reconcile_session(&state).await.is_some())
+}
+
+#[tauri::command]
+pub async fn current_session(
+    state: State<'_, LaunchState>,
+) -> Result<Option<RunningSession>, String> {
+    Ok(reconcile_session(&state).await)
 }
 
 #[tauri::command]
 pub async fn launch_engine(
     app: AppHandle,
     state: State<'_, LaunchState>,
-) -> Result<LaunchStarted, String> {
-    {
-        // Refuse if a child is already alive
-        let mut guard = state.inner.lock().await;
-        if let Some(child) = guard.as_mut() {
-            if matches!(child.try_wait(), Ok(None)) {
-                return Err(LaunchError::AlreadyRunning.to_string());
-            }
-            *guard = None;
-        }
+) -> Result<RunningSession, String> {
+    if reconcile_session(&state).await.is_some() {
+        return Err(LaunchError::AlreadyRunning.to_string());
     }
 
     let settings = settings::load_settings().map_err(|e| LaunchError::Settings(e))?;
@@ -240,7 +373,7 @@ pub async fn launch_engine(
     let binary = find_engine_binary(&engine_dir)
         .ok_or_else(|| LaunchError::BinaryNotFound(engine_dir.clone()))?;
 
-    // Make sure the binary is allowed to run on macOS (idempotent best-effort)
+    // Best-effort: clear quarantine on macOS before each launch
     strip_quarantine(&binary);
 
     let username = match profile::load_profile().map_err(LaunchError::Profile)? {
@@ -249,14 +382,15 @@ pub async fn launch_engine(
     };
     let args = build_args(&settings, &username);
 
-    // Working directory: the engine's parent so relative paths (games/, mods/)
-    // resolve against `<engine>/` for non-`.app` layouts. For `.app` bundles
-    // we still cd to the engine root so logs and config end up there.
     let cwd = engine_dir.clone();
 
     let (log_file, log_path) = new_log_file().map_err(LaunchError::from)?;
-    let log_path_display = log_path.to_string_lossy().into_owned();
     drop(log_file); // we'll reopen in append mode in the streaming task
+
+    let binary_name = binary
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "luanti".to_string());
 
     let mut command = Command::new(&binary);
     command
@@ -270,62 +404,67 @@ pub async fn launch_engine(
     let mut child = command.spawn().map_err(LaunchError::from)?;
     let pid = child.id().unwrap_or(0);
 
-    // Stream stdout + stderr to log file and emit per-line events
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let app_for_stdout = app.clone();
-    let log_path_stdout = log_path.clone();
-    if let Some(stdout) = stdout {
+    let info = RunningSession {
+        pid,
+        log_path: log_path.clone(),
+        started_at: Utc::now(),
+        binary: binary.clone(),
+        binary_name,
+    };
+
+    // Persist to disk so a launcher crash doesn't lose track of the child
+    if let Err(err) = write_session(&info) {
+        eprintln!("[launch] warning: could not write session.json: {err}");
+    }
+
+    // Stream stdout + stderr → log file + per-line UI events
+    if let Some(stdout) = child.stdout.take() {
+        let app2 = app.clone();
+        let path2 = log_path.clone();
         tokio::spawn(async move {
-            stream_to_log(stdout, "stdout", app_for_stdout, log_path_stdout).await;
+            stream_to_log(stdout, "stdout", app2, path2).await;
         });
     }
-    let app_for_stderr = app.clone();
-    let log_path_stderr = log_path.clone();
-    if let Some(stderr) = stderr {
+    if let Some(stderr) = child.stderr.take() {
+        let app2 = app.clone();
+        let path2 = log_path.clone();
         tokio::spawn(async move {
-            stream_to_log(stderr, "stderr", app_for_stderr, log_path_stderr).await;
+            stream_to_log(stderr, "stderr", app2, path2).await;
         });
     }
 
     {
         let mut guard = state.inner.lock().await;
-        *guard = Some(child);
+        *guard = SessionState::Owned {
+            child,
+            info: info.clone(),
+        };
     }
 
-    let started = LaunchStarted {
-        pid,
-        log_path: log_path_display.clone(),
-    };
-    let _ = app.emit(events::STARTED, started.clone());
+    let _ = app.emit(events::STARTED, info.clone());
 
-    // Reap the process in a detached task so the command returns immediately
+    // Reaper task: wait for the child to exit, then notify the UI and clear state.
     let inner = state.inner.clone();
     let app_for_exit = app.clone();
     tokio::spawn(async move {
         let exit_status = {
             let mut guard = inner.lock().await;
-            match guard.as_mut() {
-                Some(child) => child.wait().await.ok(),
-                None => None,
+            match &mut *guard {
+                SessionState::Owned { child, .. } => child.wait().await.ok(),
+                _ => None,
             }
         };
         {
             let mut guard = inner.lock().await;
-            *guard = None;
+            *guard = SessionState::None;
         }
+        clear_session_file();
         let exit_code = exit_status.as_ref().and_then(|s| s.code());
         let success = exit_status.as_ref().map(|s| s.success()).unwrap_or(false);
-        let _ = app_for_exit.emit(
-            events::EXITED,
-            LaunchExited {
-                exit_code,
-                success,
-            },
-        );
+        let _ = app_for_exit.emit(events::EXITED, LaunchExited { exit_code, success });
     });
 
-    Ok(started)
+    Ok(info)
 }
 
 async fn stream_to_log<R: tokio::io::AsyncRead + Unpin>(
@@ -336,7 +475,6 @@ async fn stream_to_log<R: tokio::io::AsyncRead + Unpin>(
 ) {
     let mut buf = BufReader::new(reader).lines();
     while let Ok(Some(line)) = buf.next_line().await {
-        // Append to the rolling log file (best effort; never block on errors)
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -356,12 +494,33 @@ async fn stream_to_log<R: tokio::io::AsyncRead + Unpin>(
 }
 
 #[tauri::command]
-pub async fn stop_engine(state: State<'_, LaunchState>) -> Result<(), String> {
+pub async fn stop_engine(
+    app: AppHandle,
+    state: State<'_, LaunchState>,
+) -> Result<(), String> {
     let mut guard = state.inner.lock().await;
-    if let Some(child) = guard.as_mut() {
-        let _ = child.start_kill();
+    let info = guard.info().cloned();
+    match &mut *guard {
+        SessionState::Owned { child, .. } => {
+            let _ = child.start_kill();
+        }
+        SessionState::Recovered { info } => {
+            // We don't own the Child handle, kill via the OS
+            let _ = kill_pid(info.pid);
+            // Also notify the UI ourselves since no reaper task is watching.
+            let _ = app.emit(
+                events::EXITED,
+                LaunchExited {
+                    exit_code: None,
+                    success: true,
+                },
+            );
+        }
+        SessionState::None => {}
     }
-    *guard = None;
+    clear_session_file();
+    *guard = SessionState::None;
+    drop(info); // explicit
     Ok(())
 }
 
@@ -397,5 +556,20 @@ mod tests {
         let args = build_args(&s, "U");
         assert!(!args.iter().any(|a| a == "--address"));
         assert!(!args.iter().any(|a| a == "--go"));
+    }
+
+    #[test]
+    fn normalize_exec_name_strips_exe_and_lowercases() {
+        assert_eq!(normalize_exec_name("luanti"), "luanti");
+        assert_eq!(normalize_exec_name("Luanti"), "luanti");
+        assert_eq!(normalize_exec_name("luanti.exe"), "luanti");
+        assert_eq!(normalize_exec_name("LUANTI.EXE"), "luanti");
+    }
+
+    #[test]
+    fn pid_alive_with_name_rejects_unrelated_pid() {
+        // PID 1 is init/launchd on Unix and "System Idle"/"System" on Windows;
+        // none of those should pass the `luanti` name check.
+        assert!(!pid_alive_with_name(1, "luanti"));
     }
 }
