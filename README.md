@@ -52,7 +52,9 @@ npm run tauri build    # produces a signed bundle in src-tauri/target/release/bu
 - [x] **Step 3a** — Engine pipeline: download + SHA-256 verification + zip extract + auto-install at "Play"
 - [x] **Step 3b** — `aracdia-engine` repo created at [`Urac-coder/aracdia-engine`](https://github.com/Urac-coder/aracdia-engine) with a CI release workflow producing zips for macOS arm64, Linux x64 and Windows x64 (see [`docs/CREATE_ARACDIA_ENGINE.md`](docs/CREATE_ARACDIA_ENGINE.md))
 - [x] **Step 5** — Engine spawn (subprocess) with stdout/stderr capture, rolling log file, macOS quarantine handling, single-process invariant, "Quitter le jeu" UI
-- [ ] **Step 4** — Game content download + extraction
+- [x] **Phase A.1** — Minimum Aracdia game content: `game.conf`, menu assets, `aracdia_core` mod with 7 nodes (dirt / grass / stone / sand / water / wood / leaves), mapgen aliases, 3 biomes, placeholder textures. Verified to boot a headless server on `--gameid aracdia` with no errors.
+- [ ] **Phase A.2** — Auto-launch into `aracdia` (deploy `game/` next to the engine + pass `--gameid aracdia` from the launcher)
+- [ ] **Step 4** — Game content download + extraction (separate versioned releases)
 - [ ] **Step 6** — Launcher self-update (Tauri Updater + Ed25519 signing)
 - [ ] **Step 7** — Polish (settings, error states, telemetry)
 - [ ] **Step 8** — Game `mods/` (Lua): weight inventory, MOBA-like spells, custom UI
